@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -825,6 +827,7 @@ private fun emptyStateLinks(filter: String): List<Pair<String, String>> {
  * iOS empty state: 44pt calendar glyph at `onSurface 0.3`, subheadline title,
  * caption body, and primary buttons linking to the other two views.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EmptyState(filter: String, onSelectFilter: (String) -> Unit) {
     Column(
@@ -854,7 +857,13 @@ private fun EmptyState(filter: String, onSelectFilter: (String) -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        // Wraps so a legacy filter's three links, or a large font scale,
+        // never push a button off a narrow phone.
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             emptyStateLinks(filter).forEach { (value, label) ->
                 Button(
                     onClick = { onSelectFilter(value) },

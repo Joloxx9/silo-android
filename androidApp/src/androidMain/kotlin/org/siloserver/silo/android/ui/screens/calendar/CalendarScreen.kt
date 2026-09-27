@@ -218,7 +218,7 @@ fun CalendarScreen(
                         !state.hasAnyItems -> item(key = "empty") {
                             EmptyState(
                                 filter = state.filter,
-                                onShowEverything = { viewModel.setFilter(CalendarFilter.Everything) },
+                                onSelectFilter = viewModel::setFilter,
                             )
                         }
                         else -> items(state.weekDates, key = { "day-$it" }) { date ->
@@ -808,13 +808,25 @@ private fun BadgePill(label: String) {
 // MARK: - Empty state
 
 /**
+ * The views an empty week links to: always the other two, never the one on
+ * screen (silo-server #1494, silo-apple #513). "all" is the legacy spelling of
+ * Everything; any other legacy filter links to all three views.
+ */
+private fun emptyStateLinks(filter: String): List<Pair<String, String>> {
+    val view = if (filter == CalendarFilter.All) CalendarFilter.Everything else filter
+    return listOf(
+        CalendarFilter.Following to "Following",
+        CalendarFilter.Trending to "Trending",
+        CalendarFilter.Everything to "All",
+    ).filter { (value, _) -> value != view }
+}
+
+/**
  * iOS empty state: 44pt calendar glyph at `onSurface 0.3`, subheadline title,
- * caption body, and a 220pt "Show Everything" primary button whenever the
- * filter is narrower than Everything.
+ * caption body, and primary buttons linking to the other two views.
  */
 @Composable
-private fun EmptyState(filter: String, onShowEverything: () -> Unit) {
-    val isEverything = filter == CalendarFilter.Everything || filter == CalendarFilter.All
+private fun EmptyState(filter: String, onSelectFilter: (String) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -830,11 +842,7 @@ private fun EmptyState(filter: String, onShowEverything: () -> Unit) {
             modifier = Modifier.size(44.dp),
         )
         Text(
-            text = if (filter == CalendarFilter.Following) {
-                "Nothing from shows you follow"
-            } else {
-                "Nothing scheduled this week"
-            },
+            text = emptyTitle(filter),
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -846,17 +854,19 @@ private fun EmptyState(filter: String, onShowEverything: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
-        if (!isEverything) {
-            Button(
-                onClick = onShowEverything,
-                modifier = Modifier.width(220.dp),
-                shape = CircleShape,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.onSurface,
-                    contentColor = MaterialTheme.colorScheme.background,
-                ),
-            ) {
-                Text("Show Everything", fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            emptyStateLinks(filter).forEach { (value, label) ->
+                Button(
+                    onClick = { onSelectFilter(value) },
+                    modifier = Modifier.width(140.dp),
+                    shape = CircleShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.onSurface,
+                        contentColor = MaterialTheme.colorScheme.background,
+                    ),
+                ) {
+                    Text(label, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                }
             }
         }
     }
@@ -912,8 +922,15 @@ private fun cardSubtitle(item: CalendarItem): String? {
     return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
+private fun emptyTitle(filter: String): String = when (filter) {
+    CalendarFilter.Following -> "Nothing from shows you follow"
+    CalendarFilter.Trending -> "Nothing trending this week"
+    else -> "Nothing scheduled this week"
+}
+
 private fun emptySubtitle(filter: String): String = when (filter) {
     CalendarFilter.Following ->
         "No upcoming releases this week from shows you watch, favorite, or watchlist."
+    CalendarFilter.Trending -> "No trending releases this week."
     else -> "No movie releases or episode airings in this week."
 }

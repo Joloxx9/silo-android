@@ -1561,6 +1561,9 @@ private fun BadgePill(text: String) {
             fontWeight = FontWeight.Bold,
             color = Color.Black,
             maxLines = 1,
+            // Wrapping drew only the first word in a full-width pill.
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -1650,7 +1653,9 @@ private fun CalendarMessage(
 // MARK: - Formatting helpers
 
 private fun badgeLabel(badge: String): String? = when (badge) {
-    CalendarBadge.SeriesPremiere -> "SERIES PREMIERE"
+    // tvOS says "SERIES PREMIERE", which does not fit a poster at 14sp;
+    // NEW SEASON already marks season premieres.
+    CalendarBadge.SeriesPremiere -> "PREMIERE"
     CalendarBadge.SeasonPremiere -> "NEW SEASON"
     CalendarBadge.Finale -> "FINALE"
     else -> null

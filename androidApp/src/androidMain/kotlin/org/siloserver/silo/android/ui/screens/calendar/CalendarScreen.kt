@@ -800,6 +800,9 @@ private fun BadgePill(label: String) {
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.8.sp, // iOS tracking 0.8
             maxLines = 1,
+            // Wrapping drew only the first word in a full-width pill.
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.background,
         )
     }
@@ -863,8 +866,10 @@ private fun EmptyState(filter: String, onShowEverything: () -> Unit) {
 }
 
 private fun badgeLabel(badge: String): String? = when (badge) {
-    // iOS CalendarBadge labels (uppercased editorial).
-    CalendarBadge.SeriesPremiere -> "SERIES PREMIERE"
+    // iOS CalendarBadge labels (uppercased editorial). iOS says "SERIES
+    // PREMIERE", which does not fit a poster at the 11sp badge floor;
+    // NEW SEASON already marks season premieres.
+    CalendarBadge.SeriesPremiere -> "PREMIERE"
     CalendarBadge.SeasonPremiere -> "NEW SEASON"
     CalendarBadge.Finale -> "FINALE"
     else -> null

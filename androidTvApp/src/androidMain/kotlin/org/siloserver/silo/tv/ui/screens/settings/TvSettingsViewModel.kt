@@ -594,6 +594,8 @@ class TvSettingsViewModel(
 
     fun setSubtitleFontColor(value: String) = editAppearance { it.copy(fontColor = value) }
 
+    fun setSubtitleTextOpacity(value: Int) = editAppearance { it.copy(textOpacity = value) }
+
     fun setSubtitleTextOutline(value: Boolean) = editAppearance { it.copy(textOutline = value) }
 
     fun setSubtitleTextOutlineColor(value: String) = editAppearance { it.copy(textOutlineColor = value) }

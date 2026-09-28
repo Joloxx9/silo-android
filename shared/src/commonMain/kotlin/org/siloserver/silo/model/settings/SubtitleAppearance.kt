@@ -56,6 +56,7 @@ data class SubtitleAppearance(
     val fontSize: SubtitleFontSizePreset = SubtitleFontSizePreset.Large,
     val fontFamily: String = SANS_SERIF,
     val fontColor: String = "#ffffff",
+    val textOpacity: Int = 100,
     val backgroundColor: String = "#000000",
     val backgroundStyle: SubtitleBackgroundStylePreset = SubtitleBackgroundStylePreset.Shadow,
     val backgroundOpacity: Int = 75,
@@ -68,11 +69,13 @@ data class SubtitleAppearance(
         val safeBackgroundColor = if (isValidHex(backgroundColor)) backgroundColor else DEFAULT.backgroundColor
         val safeOutlineColor = if (isValidHex(textOutlineColor)) textOutlineColor else DEFAULT.textOutlineColor
         val clampedOpacity = backgroundOpacity.coerceIn(0, 100)
+        val clampedTextOpacity = textOpacity.coerceIn(1, 100)
         return if (
             safeFontColor == fontColor &&
             safeBackgroundColor == backgroundColor &&
             safeOutlineColor == textOutlineColor &&
-            clampedOpacity == backgroundOpacity
+            clampedOpacity == backgroundOpacity &&
+            clampedTextOpacity == textOpacity
         ) {
             this
         } else {
@@ -81,6 +84,7 @@ data class SubtitleAppearance(
                 backgroundColor = safeBackgroundColor,
                 textOutlineColor = safeOutlineColor,
                 backgroundOpacity = clampedOpacity,
+                textOpacity = clampedTextOpacity,
             )
         }
     }

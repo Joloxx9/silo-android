@@ -19,23 +19,34 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -136,6 +147,15 @@ fun SubtitleStyleSheet(
                     },
                 )
 
+                PercentInputRow(
+                    label = "Text Opacity",
+                    value = appearance.textOpacity,
+                    min = 1,
+                    onChange = { value ->
+                        onUpdate(appearance.copy(textOpacity = value).sanitized())
+                    },
+                )
+
                 // ---- Background section -----------------------------------------
                 SectionHeader("Background")
 
@@ -155,8 +175,10 @@ fun SubtitleStyleSheet(
                     },
                 )
 
-                OpacityRow(
-                    opacity = appearance.backgroundOpacity,
+                PercentInputRow(
+                    label = "Background Opacity",
+                    value = appearance.backgroundOpacity,
+                    min = 0,
                     onChange = { value ->
                         onUpdate(appearance.copy(backgroundOpacity = value).sanitized())
                     },
@@ -422,34 +444,66 @@ private fun ColorSwatch(
     )
 }
 
+/**
+ * A typed percentage value (`min`-100), for controls where dragging a slider
+ * is more fiddly than just typing the number — opacity wants precision at the
+ * low end where a few percent is the difference between legible and not.
+ */
 @Composable
-private fun OpacityRow(
-    opacity: Int,
+private fun PercentInputRow(
+    label: String,
+    value: Int,
+    min: Int,
     onChange: (Int) -> Unit,
 ) {
-    Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = "Opacity ${opacity.coerceIn(0, 100)}%",
-                color = Color.White,
-                fontSize = 16.sp,
-                modifier = Modifier.weight(1f),
-            )
+    var text by remember(value) { mutableStateOf(value.toString()) }
+
+    // Committing on every keystroke fights the clamp: typing "0" below the
+    // floor calls onChange(min), which can equal the value already in effect,
+    // so `value` never changes and `remember(value)` never re-keys the draft
+    // back to a valid display. Committing once, on blur/Done, avoids that
+    // entirely and lets the field hold invalid intermediate text (including
+    // empty) while the user is still typing.
+    fun commit() {
+        val clamped = text.toIntOrNull()?.coerceIn(min, 100)
+        if (clamped != null && clamped != value) {
+            onChange(clamped)
         }
-        Slider(
-            value = opacity.coerceIn(0, 100).toFloat(),
-            onValueChange = { value -> onChange(value.toInt().coerceIn(0, 100)) },
-            valueRange = 0f..100f,
-            steps = 0,
-            colors = SliderDefaults.colors(
-                thumbColor = Color.White,
-                activeTrackColor = Color(0xFF06B6D4),
-                inactiveTrackColor = Color.White.copy(alpha = 0.25f),
-            ),
+        text = (clamped ?: value).toString()
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 16.sp,
+            modifier = Modifier.weight(1f),
         )
+        BasicTextField(
+            value = text,
+            onValueChange = { input -> text = input.filter { it.isDigit() }.take(3) },
+            singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 16.sp, textAlign = TextAlign.End),
+            cursorBrush = SolidColor(Color.White),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { commit() }),
+            modifier = Modifier
+                .width(44.dp)
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.4f),
+                    shape = RoundedCornerShape(6.dp),
+                )
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .onFocusChanged { focusState -> if (!focusState.isFocused) commit() },
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(text = "%", color = Color.White, fontSize = 16.sp)
     }
 }
 
@@ -501,6 +555,7 @@ private val TEXT_COLOR_SWATCHES = listOf(
     "#d946ef", // Magenta
     "#ef4444", // Red
     "#3b82f6", // Blue
+    "#9ca3af", // Gray
     "#000000", // Black
 )
 

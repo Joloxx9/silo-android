@@ -1628,6 +1628,27 @@ private fun HudSubtitlesPane(
                 )
 
                 HudFocusedSettingRow(
+                    label = "Text Opacity",
+                    value = "${appearance.textOpacity}%",
+                    enabled = stylingEnabled,
+                    rightFocusRequester = subtitleTextColorFocus,
+                    onActivate = {
+                        onPresentPicker(
+                            HudPickerPresentation(
+                                title = "Text Opacity",
+                                options = TEXT_OPACITY_STEPS.map { HudPickerOption(it.toString(), "$it%") },
+                                selectedId = appearance.textOpacity.toString(),
+                                onSelect = { id ->
+                                    id.toIntOrNull()?.let {
+                                        onAppearanceChanged(appearance.copy(textOpacity = it))
+                                    }
+                                },
+                            ),
+                        )
+                    },
+                )
+
+                HudFocusedSettingRow(
                     label = "Background",
                     value = BACKGROUND_STYLES.firstOrNull { it.first == appearance.backgroundStyle }?.second
                         ?: appearance.backgroundStyle.name,
@@ -1818,11 +1839,13 @@ private fun HudSubtitlePreview(
     val decoration = TvSubtitleAppearanceOptions.previewDecoration(safe)
     val fontSize = TvSubtitleAppearanceOptions.previewFontSizeSp(safe.fontSize).sp
     val fontFamily = TvSubtitleAppearanceOptions.previewFontFamily(safe.fontFamily)
-    val foreground = hexToColor(safe.fontColor)
+    val foreground = hexToColor(safe.fontColor).copy(
+        alpha = TvSubtitleAppearanceOptions.previewOpacityAlpha(safe.textOpacity, floor = 1),
+    )
     val outline = hexToColor(safe.textOutlineColor)
     val backgroundColor = hexToColor(safe.backgroundColor).copy(
         alpha = if (safe.backgroundStyle == SubtitleBackgroundStylePreset.Box) {
-            safe.backgroundOpacity.coerceIn(0, 100) / 100f
+            TvSubtitleAppearanceOptions.previewOpacityAlpha(safe.backgroundOpacity, floor = 0)
         } else {
             0f
         },
@@ -1997,6 +2020,7 @@ private val FONT_FAMILIES = TvSubtitleAppearanceOptions.FONT_FAMILIES
 private val BACKGROUND_STYLES = TvSubtitleAppearanceOptions.BACKGROUND_STYLES
 private val POSITIONS = TvSubtitleAppearanceOptions.POSITIONS
 private val OPACITY_STEPS = TvSubtitleAppearanceOptions.OPACITY_STEPS
+private val TEXT_OPACITY_STEPS = TvSubtitleAppearanceOptions.TEXT_OPACITY_STEPS
 private val TEXT_COLOR_SWATCHES = TvSubtitleAppearanceOptions.TEXT_COLOR_SWATCHES
 private val BACKGROUND_COLOR_SWATCHES = TvSubtitleAppearanceOptions.BACKGROUND_COLOR_SWATCHES
 private val OUTLINE_COLOR_SWATCHES = TvSubtitleAppearanceOptions.OUTLINE_COLOR_SWATCHES

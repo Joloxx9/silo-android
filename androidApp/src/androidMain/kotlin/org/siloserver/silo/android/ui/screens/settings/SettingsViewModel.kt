@@ -143,6 +143,13 @@ class SettingsViewModel(
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()
 
+    private var subtitleLanguageEditGeneration = 0L
+    private var subtitleModeEditGeneration = 0L
+    private var forcedSubtitlesEditGeneration = 0L
+    private var subtitleLanguageConfirmedGeneration = 0L
+    private var subtitleModeConfirmedGeneration = 0L
+    private var forcedSubtitlesConfirmedGeneration = 0L
+
     /** Profile-wide video and audiobook skip intervals (settings revision 9). */
     val seekIntervals = SeekIntervalSettingsModel(seekIntervalStore, audiobookSettingsStore, viewModelScope)
 
@@ -557,8 +564,14 @@ class SettingsViewModel(
         }
     }
 
+    // The subtitle setters below also store each write's confirmed value in
+    // the cached profile, which offline playback reads for its subtitle
+    // preferences. Only a newer successful write to the same field supersedes
+    // a confirmed value; pending or failed edits leave that value available.
+
     /** [language] is a BCP 47 tag, or "" for off. */
     fun setSubtitleLanguage(language: String) {
+        val editGeneration = ++subtitleLanguageEditGeneration
         val previous = _uiState.value.subtitleLanguage
         _uiState.update { it.copy(subtitleLanguage = language) }
         viewModelScope.launch {
@@ -568,12 +581,18 @@ class SettingsViewModel(
                     if (it.subtitleLanguage == language) it.copy(subtitleLanguage = previous) else it
                 }
             } else {
-                applyResolved(result.snapshot, edited = language) { it.subtitleLanguage }
+                if (editGeneration > subtitleLanguageConfirmedGeneration) {
+                    applyResolved(result.snapshot, edited = language) { it.subtitleLanguage }
+                    subtitleLanguageConfirmedGeneration = editGeneration
+                    val confirmed = result.snapshot?.subtitleLanguage ?: language
+                    activeProfileStore.update { it.copy(subtitleLanguage = confirmed) }
+                }
             }
         }
     }
 
     fun setSubtitleMode(mode: SubtitleMode) {
+        val editGeneration = ++subtitleModeEditGeneration
         val previous = _uiState.value.subtitleMode
         _uiState.update { it.copy(subtitleMode = mode) }
         viewModelScope.launch {
@@ -583,12 +602,18 @@ class SettingsViewModel(
                     if (it.subtitleMode == mode) it.copy(subtitleMode = previous) else it
                 }
             } else {
-                applyResolved(result.snapshot, edited = mode.wire) { it.subtitleMode }
+                if (editGeneration > subtitleModeConfirmedGeneration) {
+                    applyResolved(result.snapshot, edited = mode.wire) { it.subtitleMode }
+                    subtitleModeConfirmedGeneration = editGeneration
+                    val confirmed = result.snapshot?.subtitleMode ?: mode.wire
+                    activeProfileStore.update { it.copy(subtitleMode = confirmed) }
+                }
             }
         }
     }
 
     fun setShowForcedSubtitles(enabled: Boolean) {
+        val editGeneration = ++forcedSubtitlesEditGeneration
         val previous = _uiState.value.showForcedSubtitles
         _uiState.update { it.copy(showForcedSubtitles = enabled) }
         viewModelScope.launch {
@@ -598,8 +623,13 @@ class SettingsViewModel(
                     if (it.showForcedSubtitles == enabled) it.copy(showForcedSubtitles = previous) else it
                 }
             } else {
-                applyResolved(result.snapshot, edited = enabled.toString()) {
-                    it.showForcedSubtitles.toString()
+                if (editGeneration > forcedSubtitlesConfirmedGeneration) {
+                    applyResolved(result.snapshot, edited = enabled.toString()) {
+                        it.showForcedSubtitles.toString()
+                    }
+                    forcedSubtitlesConfirmedGeneration = editGeneration
+                    val confirmed = result.snapshot?.showForcedSubtitles ?: enabled
+                    activeProfileStore.update { it.copy(showForcedSubtitles = confirmed) }
                 }
             }
         }

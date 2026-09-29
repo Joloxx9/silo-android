@@ -180,6 +180,23 @@ interface PlayerSettingsStore {
     suspend fun setSubtitleAppearance(value: SubtitleAppearance)
 
     /**
+     * Applies [transform] atomically against the current stored appearance,
+     * read inside the same DataStore transaction that writes the result.
+     * Unlike a caller reading [subtitleAppearanceFlow] and then calling
+     * [setSubtitleAppearance] separately, no write from another caller can
+     * land in the gap between the read and the write — two edits committing
+     * around the same time (e.g. two fields as a sheet dismisses) each see
+     * the other's result instead of racing on a shared pre-transaction read.
+     *
+     * The default falls back to the non-atomic read-then-write for fakes
+     * that only need to capture the resulting value; [AndroidPlayerSettingsStore]
+     * overrides this with the real atomic transaction.
+     */
+    suspend fun updateSubtitleAppearance(transform: (SubtitleAppearance) -> SubtitleAppearance) {
+        setSubtitleAppearance(transform(subtitleAppearanceFlow.first()))
+    }
+
+    /**
      * Project the granular, client-local `subtitle.*` fields into the
      * composite `playback.subtitle_appearance` and enqueue it.
      *

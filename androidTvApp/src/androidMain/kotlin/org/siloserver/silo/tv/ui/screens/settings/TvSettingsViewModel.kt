@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -572,15 +571,15 @@ class TvSettingsViewModel(
     }
 
     /**
-     * Per-field appearance setters. Each reads the freshest appearance from the
-     * store before copying the single changed field, so a concurrent edit (e.g.
-     * a HUD change while a Settings picker is open) is not clobbered by a stale
-     * composable-captured snapshot. Mirrors [onSubtitleSizeChanged].
+     * Per-field appearance setters. Each applies its change atomically inside
+     * the store's own write transaction ([PlayerSettingsStore.updateSubtitleAppearance]),
+     * so a concurrent edit (e.g. a HUD change while a Settings picker is
+     * open) can't race on a snapshot read before either writes. Mirrors
+     * [onSubtitleSizeChanged].
      */
     private fun editAppearance(transform: (SubtitleAppearance) -> SubtitleAppearance) {
         viewModelScope.launch {
-            val current = playerSettingsStore.subtitleAppearanceFlow.first()
-            playerSettingsStore.setSubtitleAppearance(transform(current))
+            playerSettingsStore.updateSubtitleAppearance(transform)
             // The granular subtitle.* fields are client-local — the contract
             // carries appearance as one object — so a per-field edit only
             // reaches the server once it is projected into the composite.

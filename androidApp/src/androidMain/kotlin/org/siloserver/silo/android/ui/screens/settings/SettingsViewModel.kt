@@ -29,7 +29,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -498,22 +497,17 @@ class SettingsViewModel(
 
     /**
      * Commits a subtitle-appearance change via a transform rather than a
-     * precomputed value (replaced the former `setSubtitleAppearance`): reads
-     * the freshest appearance from the store immediately before applying it,
-     * mirroring
-     * [org.siloserver.silo.tv.ui.screens.settings.TvSettingsViewModel.editAppearance].
-     * A composable-captured snapshot can go stale between when its closure
-     * was built and when it actually runs — e.g. two opacity fields
-     * committing independently as the sheet is dismissed — and building the
-     * new value from that snapshot would silently drop whichever edit lost
-     * the race.
+     * precomputed value (replaced the former `setSubtitleAppearance`).
+     * [PlayerSettingsStore.updateSubtitleAppearance][org.siloserver.silo.common.settings.PlayerSettingsStore.updateSubtitleAppearance]
+     * applies it atomically inside the store's own write transaction, so two
+     * edits committing around the same time (e.g. two opacity fields as the
+     * sheet is dismissed) can't race on a snapshot read before either writes.
      */
     fun editSubtitleAppearance(
         transform: (org.siloserver.silo.model.settings.SubtitleAppearance) -> org.siloserver.silo.model.settings.SubtitleAppearance,
     ) {
         viewModelScope.launch {
-            val current = playerSettingsStore.subtitleAppearanceFlow.first()
-            playerSettingsStore.setSubtitleAppearance(transform(current))
+            playerSettingsStore.updateSubtitleAppearance(transform)
             playerSettingsStore.flushProjectedSubtitleAppearance()
         }
     }

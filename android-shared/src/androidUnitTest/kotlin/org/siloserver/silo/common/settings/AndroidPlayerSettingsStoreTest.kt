@@ -359,6 +359,31 @@ class AndroidPlayerSettingsStoreTest {
     }
 
     @Test
+    fun `updateSubtitleAppearance applies the transform against the current value`() = runTest {
+        val store = newStore()
+        store.setSubtitleAppearance(SubtitleAppearance.DEFAULT.copy(fontSize = SubtitleFontSizePreset.XLarge))
+        store.updateSubtitleAppearance { it.copy(textOpacity = 42) }
+        val read = store.subtitleAppearanceFlow.first()
+        // The field the transform didn't touch survives...
+        assertEquals(SubtitleFontSizePreset.XLarge, read.fontSize)
+        // ...and the one it did is applied.
+        assertEquals(42, read.textOpacity)
+    }
+
+    @Test
+    fun `sequential updateSubtitleAppearance calls do not clobber each other`() = runTest {
+        val store = newStore()
+        // Each call reads the current stored value inside its own write
+        // transaction rather than a value read before either call started,
+        // so a per-field edit from one call survives the next.
+        store.updateSubtitleAppearance { it.copy(textOpacity = 55) }
+        store.updateSubtitleAppearance { it.copy(backgroundOpacity = 33) }
+        val read = store.subtitleAppearanceFlow.first()
+        assertEquals(55, read.textOpacity)
+        assertEquals(33, read.backgroundOpacity)
+    }
+
+    @Test
     fun `setPlaybackSpeed clamps out-of-range values`() = runTest {
         val store = newStore()
         store.setPlaybackSpeed(10.0)

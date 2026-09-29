@@ -532,10 +532,22 @@ class AndroidPlayerSettingsStore(
         writeString(PlaybackSettingsKeys.OrientationMode, value)
 
     override suspend fun setSubtitleAppearance(value: SubtitleAppearance) {
-        val sanitized = value.sanitized()
-        val json = sanitized.toJsonString()
+        updateSubtitleAppearance { value }
+    }
+
+    // Reads the current appearance from `prefs` inside the same `edit`
+    // transaction that writes the transformed result. DataStore serializes
+    // `edit` calls against each other (each transform lambda runs to
+    // completion holding the store's internal lock before the next one
+    // starts), so this is the actual fix for two callers racing on a
+    // separately-read "current" value — not just a smaller window.
+    override suspend fun updateSubtitleAppearance(transform: (SubtitleAppearance) -> SubtitleAppearance) {
         withScope { scope, store ->
+            var json = ""
             store.edit { prefs ->
+                val current = prefs.projectedAppearance(scope)
+                val sanitized = transform(current).sanitized()
+                json = sanitized.toJsonString()
                 prefs[stringPreferencesKey(scope.keyPrefix + PlaybackSettingsKeys.SubtitleAppearance)] = json
                 prefs[stringPreferencesKey(scope.keyPrefix + SAVED_CUSTOM_SUBTITLE_APPEARANCE)] = json
                 // The granular slots are rewritten from the composite rather

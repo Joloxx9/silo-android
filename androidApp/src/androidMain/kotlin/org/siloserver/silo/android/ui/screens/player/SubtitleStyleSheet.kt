@@ -29,11 +29,13 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -470,6 +472,16 @@ private fun PercentInputRow(
             onChange(clamped)
         }
         text = (clamped ?: value).toString()
+    }
+
+    // Dismissing the sheet while the field is still focused (swipe-away, back
+    // press) tears down this composable without firing onFocusChanged(false),
+    // so a typed-but-uncommitted percentage would otherwise be silently lost.
+    // rememberUpdatedState keeps the lambda pointed at the latest commit
+    // closure across recompositions, so onDispose always commits current text.
+    val latestCommit = rememberUpdatedState(::commit)
+    DisposableEffect(Unit) {
+        onDispose { latestCommit.value() }
     }
 
     Row(

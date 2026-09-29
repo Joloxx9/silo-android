@@ -1716,7 +1716,10 @@ private fun TvSubtitleSettingsPane(
         )
         SubtitlePicker.TextOpacity -> TvSettingsPickerSheet(
             title = "Text Opacity",
-            options = TvSubtitleAppearanceOptions.TEXT_OPACITY_PERCENT_STEPS.map { PickerOption(it.toString(), "$it%") },
+            options = TvSubtitleAppearanceOptions.percentOptions(
+                TvSubtitleAppearanceOptions.TEXT_OPACITY_PERCENT_STEPS,
+                appearance.textOpacity,
+            ).map { PickerOption(it.toString(), "$it%") },
             selectedId = appearance.textOpacity.toString(),
             onSelect = { id ->
                 id.toIntOrNull()?.let { onSubtitleTextOpacityChanged(it) }
@@ -1748,7 +1751,10 @@ private fun TvSubtitleSettingsPane(
         )
         SubtitlePicker.BackgroundOpacity -> TvSettingsPickerSheet(
             title = "Background Opacity",
-            options = TvSubtitleAppearanceOptions.OPACITY_PERCENT_STEPS.map { PickerOption(it.toString(), "$it%") },
+            options = TvSubtitleAppearanceOptions.percentOptions(
+                TvSubtitleAppearanceOptions.OPACITY_PERCENT_STEPS,
+                appearance.backgroundOpacity,
+            ).map { PickerOption(it.toString(), "$it%") },
             selectedId = appearance.backgroundOpacity.toString(),
             onSelect = { id ->
                 id.toIntOrNull()?.let { onSubtitleBackgroundOpacityChanged(it) }

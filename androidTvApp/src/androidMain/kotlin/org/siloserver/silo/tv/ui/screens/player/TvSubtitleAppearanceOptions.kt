@@ -62,6 +62,16 @@ object TvSubtitleAppearanceOptions {
      *  up from. */
     val TEXT_OPACITY_PERCENT_STEPS: List<Int> = listOf(1) + (5..100 step 5).toList()
 
+    /**
+     * A step list plus the currently saved value, so a value set elsewhere
+     * (the phone's free-typed percent field) that doesn't fall on this
+     * picker's cadence is still a selectable option. Without this, opening
+     * the picker focuses the first step and pressing Select silently
+     * overwrites the real value with it.
+     */
+    fun percentOptions(steps: List<Int>, current: Int): List<Int> =
+        (steps + current).toSortedSet().toList()
+
     /** Font / outline color palette: (hex, label). Matches Apple `fontColors`. */
     val FONT_COLORS: List<Pair<String, String>> = listOf(
         "#ffffff" to "White",

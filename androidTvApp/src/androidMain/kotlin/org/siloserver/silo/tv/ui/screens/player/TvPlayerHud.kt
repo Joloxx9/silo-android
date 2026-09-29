@@ -1636,7 +1636,10 @@ private fun HudSubtitlesPane(
                         onPresentPicker(
                             HudPickerPresentation(
                                 title = "Text Opacity",
-                                options = TEXT_OPACITY_STEPS.map { HudPickerOption(it.toString(), "$it%") },
+                                options = TvSubtitleAppearanceOptions.percentOptions(
+                                    TEXT_OPACITY_STEPS,
+                                    appearance.textOpacity,
+                                ).map { HudPickerOption(it.toString(), "$it%") },
                                 selectedId = appearance.textOpacity.toString(),
                                 onSelect = { id ->
                                     id.toIntOrNull()?.let {
@@ -1679,7 +1682,10 @@ private fun HudSubtitlesPane(
                         onPresentPicker(
                             HudPickerPresentation(
                                 title = "Background Opacity",
-                                options = OPACITY_STEPS.map { HudPickerOption(it.toString(), "$it%") },
+                                options = TvSubtitleAppearanceOptions.percentOptions(
+                                    OPACITY_STEPS,
+                                    appearance.backgroundOpacity,
+                                ).map { HudPickerOption(it.toString(), "$it%") },
                                 selectedId = appearance.backgroundOpacity.toString(),
                                 onSelect = { id ->
                                     id.toIntOrNull()?.let {

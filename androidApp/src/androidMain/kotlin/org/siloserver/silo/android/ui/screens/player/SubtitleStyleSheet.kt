@@ -62,16 +62,21 @@ import org.siloserver.silo.model.settings.SubtitlePositionPreset
  * font size/family/color, background style/color/opacity, optional outline,
  * and on-screen position.
  *
- * Each control writes back the full sanitized appearance via [onUpdate];
- * the consuming layer (`PlayerViewModel` / `PlayerSettingsStore`) is
- * responsible for persistence and propagating to [org.siloserver.silo.common.player.SubtitleManager].
+ * Each control writes back a transform via [onUpdate] rather than a
+ * precomputed value built from [appearance]: that parameter is a
+ * composable-captured snapshot that can go stale between when a control's
+ * closure is built and when it actually runs (e.g. two opacity fields
+ * committing independently as the sheet is dismissed), so the caller applies
+ * the transform against the freshest value it can read instead. The
+ * consuming layer (`PlayerViewModel` / `PlayerSettingsStore`) is responsible
+ * for persistence and propagating to [org.siloserver.silo.common.player.SubtitleManager].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubtitleStyleSheet(
     isVisible: Boolean,
     appearance: SubtitleAppearance,
-    onUpdate: (SubtitleAppearance) -> Unit,
+    onUpdate: ((SubtitleAppearance) -> SubtitleAppearance) -> Unit,
     onDismiss: () -> Unit,
     // Gear-submenu back affordance: dismisses this sheet and reopens the
     // parent settings sheet (wired in PlayerOverlay).
@@ -129,14 +134,14 @@ fun SubtitleStyleSheet(
                 FontSizeRow(
                     selected = appearance.fontSize,
                     onSelect = { value ->
-                        onUpdate(appearance.copy(fontSize = value).sanitized())
+                        onUpdate { it.copy(fontSize = value).sanitized() }
                     },
                 )
 
                 FontFamilyRow(
                     selected = appearance.fontFamily,
                     onSelect = { value ->
-                        onUpdate(appearance.copy(fontFamily = value).sanitized())
+                        onUpdate { it.copy(fontFamily = value).sanitized() }
                     },
                 )
 
@@ -145,7 +150,7 @@ fun SubtitleStyleSheet(
                     swatches = TEXT_COLOR_SWATCHES,
                     selectedHex = appearance.fontColor,
                     onSelect = { hex ->
-                        onUpdate(appearance.copy(fontColor = hex).sanitized())
+                        onUpdate { it.copy(fontColor = hex).sanitized() }
                     },
                 )
 
@@ -154,7 +159,7 @@ fun SubtitleStyleSheet(
                     value = appearance.textOpacity,
                     min = 1,
                     onChange = { value ->
-                        onUpdate(appearance.copy(textOpacity = value).sanitized())
+                        onUpdate { it.copy(textOpacity = value).sanitized() }
                     },
                 )
 
@@ -164,7 +169,7 @@ fun SubtitleStyleSheet(
                 BackgroundStyleRow(
                     selected = appearance.backgroundStyle,
                     onSelect = { value ->
-                        onUpdate(appearance.copy(backgroundStyle = value).sanitized())
+                        onUpdate { it.copy(backgroundStyle = value).sanitized() }
                     },
                 )
 
@@ -173,7 +178,7 @@ fun SubtitleStyleSheet(
                     swatches = BACKGROUND_COLOR_SWATCHES,
                     selectedHex = appearance.backgroundColor,
                     onSelect = { hex ->
-                        onUpdate(appearance.copy(backgroundColor = hex).sanitized())
+                        onUpdate { it.copy(backgroundColor = hex).sanitized() }
                     },
                 )
 
@@ -182,7 +187,7 @@ fun SubtitleStyleSheet(
                     value = appearance.backgroundOpacity,
                     min = 0,
                     onChange = { value ->
-                        onUpdate(appearance.copy(backgroundOpacity = value).sanitized())
+                        onUpdate { it.copy(backgroundOpacity = value).sanitized() }
                     },
                 )
 
@@ -194,7 +199,7 @@ fun SubtitleStyleSheet(
                     subtitle = null,
                     checked = appearance.textOutline,
                     onCheckedChange = { value ->
-                        onUpdate(appearance.copy(textOutline = value).sanitized())
+                        onUpdate { it.copy(textOutline = value).sanitized() }
                     },
                 )
 
@@ -204,7 +209,7 @@ fun SubtitleStyleSheet(
                         swatches = BACKGROUND_COLOR_SWATCHES,
                         selectedHex = appearance.textOutlineColor,
                         onSelect = { hex ->
-                            onUpdate(appearance.copy(textOutlineColor = hex).sanitized())
+                            onUpdate { it.copy(textOutlineColor = hex).sanitized() }
                         },
                     )
                 }
@@ -215,7 +220,7 @@ fun SubtitleStyleSheet(
                 PositionRow(
                     selected = appearance.position,
                     onSelect = { value ->
-                        onUpdate(appearance.copy(position = value).sanitized())
+                        onUpdate { it.copy(position = value).sanitized() }
                     },
                 )
 

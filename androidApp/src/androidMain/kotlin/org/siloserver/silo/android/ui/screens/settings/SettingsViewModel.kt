@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
@@ -495,12 +496,24 @@ class SettingsViewModel(
         viewModelScope.launch { playerSettingsStore.setShowAudiobooks(enabled) }
     }
 
-    fun setSubtitleAppearance(value: org.siloserver.silo.model.settings.SubtitleAppearance) {
+    /**
+     * Commits a subtitle-appearance change via a transform rather than a
+     * precomputed value (replaced the former `setSubtitleAppearance`): reads
+     * the freshest appearance from the store immediately before applying it,
+     * mirroring
+     * [org.siloserver.silo.tv.ui.screens.settings.TvSettingsViewModel.editAppearance].
+     * A composable-captured snapshot can go stale between when its closure
+     * was built and when it actually runs — e.g. two opacity fields
+     * committing independently as the sheet is dismissed — and building the
+     * new value from that snapshot would silently drop whichever edit lost
+     * the race.
+     */
+    fun editSubtitleAppearance(
+        transform: (org.siloserver.silo.model.settings.SubtitleAppearance) -> org.siloserver.silo.model.settings.SubtitleAppearance,
+    ) {
         viewModelScope.launch {
-            playerSettingsStore.setSubtitleAppearance(value)
-            // The granular subtitle.* fields are client-local — the contract
-            // carries appearance as one object — so a per-field edit only
-            // reaches the server once projected into the composite.
+            val current = playerSettingsStore.subtitleAppearanceFlow.first()
+            playerSettingsStore.setSubtitleAppearance(transform(current))
             playerSettingsStore.flushProjectedSubtitleAppearance()
         }
     }

@@ -674,7 +674,7 @@ fun PlayerOverlay(
     SubtitleStyleSheet(
         isVisible = subtitleStyleVisible,
         appearance = viewModel.subtitleAppearance.collectAsState().value,
-        onUpdate = viewModel::onSetSubtitleAppearance,
+        onUpdate = viewModel::onEditSubtitleAppearance,
         onDismiss = { subtitleStyleVisible = false },
         onBack = {
             subtitleStyleVisible = false

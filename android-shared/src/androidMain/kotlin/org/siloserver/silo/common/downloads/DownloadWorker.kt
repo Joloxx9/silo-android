@@ -21,6 +21,8 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import org.siloserver.silo.model.download.DownloadStatus
 import org.siloserver.silo.model.download.DownloadRecord
+import org.siloserver.silo.model.download.DownloadStatusEvent
+import org.siloserver.silo.model.download.statusEnum
 import org.siloserver.silo.repository.DownloadsRepository
 import org.siloserver.silo.network.*
 import org.siloserver.silo.network.apiv2.managedDownloadAuth
@@ -43,6 +45,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.net.URLDecoder
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 internal fun DownloadRecord.withWorkerStatus(
@@ -141,20 +144,51 @@ class DownloadWorker(
         }.onFailure { Log.w(TAG, "setForeground initial failed", it) }
 
         var activeUri: String? = null
-
-        // Resume state (survives process death + WorkManager retries): the partial's
-        // uri + the validator captured at download start. Resume offset is the REAL
-        // on-disk size (fd stat), never the metadata SIZE column (stale while pending).
-        val existing = runCatching { metadataStore.readSidecar(serverId, profileId, fileId) }.getOrNull()
-        val resumeUri = existing?.localUri
-        val resumeFrom = resumeUri?.let { storage.partialSize(it) } ?: 0L
-        val resumeValidator = existing?.resumeValidator
-        // Resume ONLY with a validator: an unvalidated Range append would silently
-        // corrupt the file if the source changed (the server can't tell us). No
-        // validator → behave as a fresh download (no Range header).
-        val canResume = resumeFrom > 0 && resumeUri != null && !resumeValidator.isNullOrBlank()
-
         try {
+            var existing = runCatching { metadataStore.readSidecar(serverId, profileId, fileId) }.getOrNull()
+            // Old WorkManager jobs have no revision input. Resolve it as their owner
+            // and save it in Room so another attempt does not depend on a UI cache.
+            val revision = inputData.getInt(KEY_REVISION, 0).takeIf { it > 0 }
+                ?: existing?.record?.takeIf { it.id == downloadId }?.revision?.takeIf { it > 0 }
+                ?: when (val result = repository.resolveTransferRecord(downloadId, fileId, transferAuthority)) {
+                    is ApiResult.Success -> {
+                        val row = result.data
+                        val sidecar = existing?.takeIf { it.record.id == downloadId }
+                            ?: return@withContext Result.failure()
+                        // Unversioned partial bytes cannot prove which registry target
+                        // they came from. Start fresh before adopting this revision.
+                        val restarted = sidecar.copy(
+                            record = row.withWorkerStatus(
+                                if (row.statusEnum() == DownloadStatus.Preparing) row.status else DownloadStatus.Ready.wire,
+                                bytesSent = 0,
+                            ),
+                            localUri = null,
+                            resumeValidator = null,
+                        )
+                        ownedWrite {
+                            storage.delete(serverId, profileId, fileId)
+                            metadataStore.writeSidecar(serverId, profileId, restarted)
+                            true
+                        }
+                        existing = restarted
+                        checkNotNull(row.revision)
+                    }
+                    is ApiResult.NetworkError -> return@withContext Result.retry()
+                    is ApiResult.Error -> return@withContext if (downloadStatusReportOutcome(result) == DownloadStatusReportOutcome.RetryLater) Result.retry() else Result.failure()
+                }
+            var transferStartedAtMs = 0L
+            // Resume state (survives process death + WorkManager retries): the partial's
+            // uri + the validator captured at download start. Resume offset is the REAL
+            // on-disk size (fd stat), never the metadata SIZE column (stale while pending).
+            val resumeUri = existing?.localUri
+            val resumeFrom = resumeUri?.let { storage.partialSize(it) } ?: 0L
+            val resumeValidator = existing?.resumeValidator
+            // Resume ONLY with a validator: an unvalidated Range append would silently
+            // corrupt the file if the source changed (the server can't tell us). No
+            // validator → behave as a fresh download (no Range header).
+            val canResume = existing?.record?.let { it.id == downloadId && it.revision == revision } == true &&
+                resumeFrom > 0 && resumeUri != null && !resumeValidator.isNullOrBlank()
+
             requireOwner()
             httpClient.prepareGet("/api/v2/downloads/${downloadId.encodeURLPathPart()}/file") {
                 transferAuthority?.let { managedDownloadAuth(it.scope) }
@@ -226,6 +260,9 @@ class DownloadWorker(
                     out = fresh.openOutputStream()
                 }
 
+                transferStartedAtMs = System.currentTimeMillis()
+                reportStatus(downloadId, DownloadStatus.Downloading, transferStartedAtMs, revision, serverId, profileId)
+
                 val channel = response.bodyAsChannel()
                 val throttle = DownloadProgressThrottle()
 
@@ -277,9 +314,6 @@ class DownloadWorker(
                 }
             }
 
-            // Server flips status → completed when its serve handler returns;
-            // a refresh here ensures the cache reflects that before the
-            // worker exits and the UI re-renders.
             val pendingUri = activeUri ?: error("download target was not created")
             val finalBytes = storage.partialSize(pendingUri)
             // Publish the file and flip the sidecar to completed under one
@@ -297,14 +331,30 @@ class DownloadWorker(
                     fileSize = finalBytes,
                     localUri = finalUri,
                     resumeValidator = "",
+                    revision = revision,
                 )
                 true
             }
             Log.i(TAG, "doWork success id=$downloadId bytes=$finalBytes")
             DiagnosticsDownloadLogger.event("download completed")
-            // Server flips status → completed when its serve handler returns;
-            // refresh so the cache reflects that before the UI re-renders.
-            repository.refresh()
+            // Strictly after the `downloading` event: the server ignores an event
+            // that is not newer than the one it holds.
+            val completedAtMs = maxOf(System.currentTimeMillis(), transferStartedAtMs + 1)
+            // Only while the cached row still describes the bytes just fetched: a
+            // refresh may already hold a replacement revision, which stays as-is.
+            if (uiPushAllowed(serverId, profileId)) {
+                repository.recordForFile(fileId)
+                    ?.takeIf { it.id == downloadId && (it.revision == null || it.revision == revision) }
+                    ?.let { existing ->
+                        repository.upsertLocal(
+                            existing.withWorkerStatus(DownloadStatus.Completed.wire, bytesSent = finalBytes, fileSize = finalBytes)
+                                .copy(completedAt = existing.completedAt ?: Instant.ofEpochMilli(completedAtMs).toString(),
+                                    revision = revision),
+                        )
+                    }
+            }
+            // The v2 file route never marks the entry completed; this report does.
+            reportStatus(downloadId, DownloadStatus.Completed, completedAtMs, revision, serverId, profileId)
             Result.success(workDataOf(KEY_BYTES_WRITTEN to finalBytes, KEY_TOTAL_BYTES to finalBytes))
         } catch (e: DownloadOwnerChanged) {
             // Preserve the original owner's partial; a new login cannot resume it.
@@ -322,6 +372,9 @@ class DownloadWorker(
             Log.i(TAG, "doWork cancelled id=$downloadId")
             DiagnosticsDownloadLogger.event("download cancelled")
             withContext(NonCancellable) {
+                // WorkManager's notification action cancels this transfer directly.
+                // Its separate status job must stop before we remove the bytes.
+                runCatching { DownloadStatusWorker.cancel(appContext, downloadId) }
                 // Delete by scope+fileId (not just activeUri): a cancel before the
                 // response is classified leaves activeUri null but a prior attempt's
                 // partial may still be on disk.
@@ -373,6 +426,30 @@ class DownloadWorker(
         }
     }
 
+    /**
+     * Queue a status event for the server registry ([DownloadStatusWorker]).
+     * Skipped without a captured owner or a known revision: the server would
+     * refuse the event, and there is no owner to send it as.
+     */
+    private fun reportStatus(downloadId: String, status: DownloadStatus, atMs: Long, revision: Int?, serverId: String, profileId: String) {
+        if (transferAuthority == null || revision == null) {
+            Log.w(TAG, "status report skipped id=$downloadId status=${status.wire} revision=$revision")
+            return
+        }
+        runCatching {
+            DownloadStatusWorker.enqueue(
+                context = appContext,
+                downloadId = downloadId,
+                event = DownloadStatusEvent(status.wire, Instant.ofEpochMilli(atMs).toString(), revision),
+                serverId = serverId,
+                profileId = profileId,
+                deviceId = inputData.getString(KEY_DEVICE_ID),
+                loginId = inputData.getString(KEY_LOGIN_ID),
+                origin = inputData.getString(KEY_ORIGIN),
+            )
+        }.onFailure { Log.w(TAG, "status report enqueue failed id=$downloadId status=${status.wire}", it) }
+    }
+
     /** Permanent failure — clean up local file and let the user retry manually. */
     private suspend fun failPermanently(
         e: Throwable,
@@ -387,6 +464,7 @@ class DownloadWorker(
         // Delete by scope+fileId so a partial from any attempt is cleaned up
         // even if this attempt failed before activeUri was assigned.
         runCatching { ownedWrite { storage.delete(serverId, profileId, fileId); true } }
+        runCatching { DownloadStatusWorker.cancel(appContext, downloadId) }
         // Best-effort: publish failed state into the repo + sidecar.
         val record = if (uiPushAllowed(serverId, profileId)) repository.recordForFile(fileId) else null
         if (record != null) {
@@ -440,6 +518,7 @@ class DownloadWorker(
         localUri: String? = null,
         fileName: String? = null,
         resumeValidator: String? = null,
+        revision: Int? = null,
     ) {
         val existing = metadataStore.readSidecar(serverId, profileId, fileId) ?: return
         metadataStore.writeSidecar(
@@ -449,7 +528,7 @@ class DownloadWorker(
                     status = status,
                     bytesSent = bytesSent,
                     fileSize = fileSize,
-                ),
+                ).copy(revision = revision ?: existing.record.revision),
                 localUri = localUri ?: existing.localUri,
                 fileName = fileName?.takeIf { it.isNotBlank() } ?: existing.fileName,
                 resumeValidator = when {
@@ -522,6 +601,7 @@ class DownloadWorker(
         const val KEY_CONTAINER = "container"
         const val KEY_MEDIA_TYPE = "media_type"
         const val KEY_DISPLAY_TITLE = "display_title"
+        const val KEY_REVISION = "revision"
         const val KEY_BYTES_WRITTEN = "bytes"
         const val KEY_TOTAL_BYTES = "total"
 
@@ -567,8 +647,10 @@ class DownloadWorker(
             deviceId: String? = null,
             loginId: String? = null,
             origin: String? = null,
+            revision: Int? = null,
         ) {
             val data = workDataOf(
+                KEY_REVISION to (revision ?: 0),
                 KEY_DEVICE_ID to deviceId,
                 KEY_LOGIN_ID to loginId,
                 KEY_ORIGIN to origin,
@@ -602,6 +684,7 @@ class DownloadWorker(
         fun cancel(context: Context, downloadId: String) {
             DownloadWorkerLifetime.beginCancellation(downloadId)
             WorkManager.getInstance(context).cancelAllWorkByTag(tagFor(downloadId))
+            DownloadStatusWorker.cancel(context, downloadId)
         }
 
         /**
@@ -611,6 +694,7 @@ class DownloadWorker(
          */
         suspend fun cancelAndAwait(context: Context, downloadId: String) {
             DownloadWorkerLifetime.beginCancellation(downloadId)
+            DownloadStatusWorker.cancel(context, downloadId)
             withContext(Dispatchers.IO) {
                 WorkManager.getInstance(context)
                     .cancelUniqueWork(tagFor(downloadId))

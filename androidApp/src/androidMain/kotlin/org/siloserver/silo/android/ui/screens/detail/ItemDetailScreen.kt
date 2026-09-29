@@ -749,7 +749,7 @@ fun ItemDetailScreen(
                                                 viewModel.onDownloadTapped(
                                                     version, episode.title,
                                                     forceRedownloadMissingLocal = episodeDownloadState.needsLocalRecovery,
-                                                    downloadContentId = episode.contentId,
+                                                    episode = episode,
                                                 )
                                             },
                                             qualityAction = { quality ->
@@ -757,7 +757,7 @@ fun ItemDetailScreen(
                                                     version, episode.title,
                                                     forceRedownloadMissingLocal = episodeDownloadState.needsLocalRecovery,
                                                     downloadQuality = quality,
-                                                    downloadContentId = episode.contentId,
+                                                    episode = episode,
                                                 )
                                             },
                                             estimate = org.siloserver.silo.model.download.DownloadSizeEstimate

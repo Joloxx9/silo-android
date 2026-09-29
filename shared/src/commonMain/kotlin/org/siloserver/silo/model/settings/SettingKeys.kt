@@ -24,7 +24,7 @@ data class SettingPresentation(
 )
 
 object SettingKeys {
-    const val REVISION = 13
+    const val REVISION = 14
 
     /** Metadata language */
     const val CATALOG_METADATA_LANGUAGE = "catalog.metadata_language"

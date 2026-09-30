@@ -48,19 +48,20 @@ object TvSubtitleAppearanceOptions {
     /** Background-opacity percentage steps for the HUD quick overlay (coarse). */
     val OPACITY_STEPS: List<Int> = listOf(0, 25, 50, 75, 100)
 
-    /** Text-opacity percentage steps for the HUD quick overlay (coarse). Floored
-     *  at 1 rather than 0 for the same reason as [TEXT_OPACITY_PERCENT_STEPS]. */
-    val TEXT_OPACITY_STEPS: List<Int> = listOf(1, 25, 50, 75, 100)
+    /** Text-opacity percentage steps for the HUD quick overlay (coarse). Starts
+     *  at 25: 1% is the schema floor but reads as no subtitles at all. Matches
+     *  silo-apple's tvOS HUD. */
+    val TEXT_OPACITY_STEPS: List<Int> = listOf(25, 50, 75, 100)
 
     /** Fine-grained opacity steps for the Settings Appearance block — 0–100 by
      *  5, matching silo-apple `TVSettingsOptions.backgroundOpacity`. */
     val OPACITY_PERCENT_STEPS: List<Int> = (0..100 step 5).toList()
 
     /** Fine-grained text-opacity steps for the Settings Appearance block — same
-     *  5-point cadence as [OPACITY_PERCENT_STEPS], but floored at 1 rather than
+     *  5-point cadence as [OPACITY_PERCENT_STEPS], but starting at 5 rather than
      *  0 since fully transparent text has no legible affordance to pick it back
-     *  up from. */
-    val TEXT_OPACITY_PERCENT_STEPS: List<Int> = listOf(1) + (5..100 step 5).toList()
+     *  up from. Matches silo-apple `TVSettingsOptions.textOpacity`. */
+    val TEXT_OPACITY_PERCENT_STEPS: List<Int> = (5..100 step 5).toList()
 
     /**
      * A step list plus the currently saved value, so a value set elsewhere

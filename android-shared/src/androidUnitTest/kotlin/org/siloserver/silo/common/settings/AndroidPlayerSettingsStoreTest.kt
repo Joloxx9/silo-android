@@ -24,6 +24,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -381,6 +382,40 @@ class AndroidPlayerSettingsStoreTest {
         val read = store.subtitleAppearanceFlow.first()
         assertEquals(55, read.textOpacity)
         assertEquals(33, read.backgroundOpacity)
+    }
+
+    @Test
+    fun `concurrent appearance edits enqueue in the order they commit`() = runTest {
+        val gated = ReturnGatedDataStore(
+            PreferenceDataStoreFactory.create(produceFile = { File(tempFolder.root, "ds_gated.preferences_pb") }),
+        )
+        val store = AndroidPlayerSettingsStore(
+            context = mockContextStub(),
+            legacyCache = fakeLegacyCache,
+            getActiveProfileId = { activeProfileId },
+            getServerUrl = { serverUrl },
+            serverSettingsFlusher = fakeFlusher,
+            getDeviceId = { null },
+            dataStoreFactory = { gated },
+        )
+        // Runs the one-time migrations so the gate only sees the two edits.
+        store.setSubtitleAppearance(SubtitleAppearance.DEFAULT)
+        fakeFlusher.calls.clear()
+        gated.armed = true
+
+        // A commits first but its edit returns only after B's has returned:
+        // exactly the interleaving where an enqueue made after `edit` returned
+        // would send B's composite and then overwrite it with A's older one.
+        val a = launch { store.updateSubtitleAppearance { it.copy(textOpacity = 40) } }
+        val b = launch { store.updateSubtitleAppearance { it.copy(backgroundOpacity = 30) } }
+        a.join()
+        b.join()
+
+        val stored = store.subtitleAppearanceFlow.first()
+        assertEquals(40, stored.textOpacity)
+        assertEquals(30, stored.backgroundOpacity)
+        val lastEnqueued = fakeFlusher.calls.last { it.key == PlaybackSettingsKeys.SubtitleAppearance }
+        assertEquals(stored, SubtitleAppearance.decode(lastEnqueued.value))
     }
 
     @Test
@@ -985,6 +1020,32 @@ private class FakeServerSettingsFlusher : ServerSettingsFlusher {
 
     override suspend fun flushNow() {
         flushNowCount++
+    }
+}
+
+/**
+ * Delegates to a real DataStore, but once [armed] holds the first edit's
+ * return until the second edit has returned. The commits themselves stay in
+ * submission order; only the callers resume in reverse.
+ */
+private class ReturnGatedDataStore(
+    private val delegate: DataStore<Preferences>,
+) : DataStore<Preferences> {
+    @Volatile var armed = false
+    private val edits = java.util.concurrent.atomic.AtomicInteger()
+    private val secondReturned = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+    override val data: kotlinx.coroutines.flow.Flow<Preferences> = delegate.data
+
+    override suspend fun updateData(transform: suspend (t: Preferences) -> Preferences): Preferences {
+        if (!armed) return delegate.updateData(transform)
+        val index = edits.incrementAndGet()
+        val result = delegate.updateData(transform)
+        when (index) {
+            1 -> secondReturned.await()
+            2 -> secondReturned.complete(Unit)
+        }
+        return result
     }
 }
 

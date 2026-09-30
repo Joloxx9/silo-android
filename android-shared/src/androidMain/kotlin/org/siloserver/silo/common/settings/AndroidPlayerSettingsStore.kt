@@ -554,13 +554,18 @@ class AndroidPlayerSettingsStore(
     // completion holding the store's internal lock before the next one
     // starts), so this is the actual fix for two callers racing on a
     // separately-read "current" value — not just a smaller window.
+    //
+    // The enqueue happens inside the transaction for the same reason: the
+    // flusher keeps the last value enqueued per key, so enqueueing after
+    // `edit` returns would let two concurrent edits enqueue in the opposite
+    // order to the one they committed in, and the server would keep the
+    // older composite.
     override suspend fun updateSubtitleAppearance(transform: (SubtitleAppearance) -> SubtitleAppearance) {
         withScope { scope, store ->
-            var json = ""
             store.edit { prefs ->
                 val current = prefs.projectedAppearance(scope)
                 val sanitized = transform(current).sanitized()
-                json = sanitized.toJsonString()
+                val json = sanitized.toJsonString()
                 prefs[stringPreferencesKey(scope.keyPrefix + PlaybackSettingsKeys.SubtitleAppearance)] = json
                 prefs[stringPreferencesKey(scope.keyPrefix + SAVED_CUSTOM_SUBTITLE_APPEARANCE)] = json
                 // The granular slots are rewritten from the composite rather
@@ -570,8 +575,8 @@ class AndroidPlayerSettingsStore(
                 // Setting an explicit appearance implicitly enables the
                 // device override (matches iOS `setSubtitleAppearance`).
                 prefs[booleanPreferencesKey(scope.keyPrefix + PlaybackSettingsKeys.SubtitleUsesDeviceOverride)] = true
+                serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
             }
-            serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
         }
     }
 
@@ -586,15 +591,16 @@ class AndroidPlayerSettingsStore(
      */
     override suspend fun flushProjectedSubtitleAppearance() {
         withScope { scope, store ->
-            val snapshot = store.data.first()
-            val projected = snapshot.projectedAppearance(scope)
-            val json = projected.toJsonString()
-            if (snapshot.stringFor(scope, PlaybackSettingsKeys.SubtitleAppearance, "") == json) return@withScope
+            // Projected and enqueued inside the transaction, like
+            // [updateSubtitleAppearance], so a concurrent edit cannot commit
+            // between the read and the write or enqueue out of commit order.
             store.edit { prefs ->
+                val json = prefs.projectedAppearance(scope).toJsonString()
+                if (prefs.stringFor(scope, PlaybackSettingsKeys.SubtitleAppearance, "") == json) return@edit
                 prefs[stringPreferencesKey(scope.keyPrefix + PlaybackSettingsKeys.SubtitleAppearance)] = json
                 prefs[stringPreferencesKey(scope.keyPrefix + SAVED_CUSTOM_SUBTITLE_APPEARANCE)] = json
+                serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
             }
-            serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
         }
     }
 
@@ -670,8 +676,9 @@ class AndroidPlayerSettingsStore(
                     // otherwise the fields left by whatever resolved while the
                     // override was off win right back over it.
                     writeGranularAppearance(it, scope, sanitized)
+                    // In the transaction, so it enqueues in commit order.
+                    serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
                 }
-                serverSettingsFlusher.enqueue(scope.profileId, PlaybackSettingsKeys.SubtitleAppearance, json, scope.serverUrl, scope.authority)
                 serverSettingsFlusher.flushNow()
             } else {
                 store.edit {

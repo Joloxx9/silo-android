@@ -40,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -469,6 +471,12 @@ private fun PercentInputRow(
     onChange: (Int) -> Unit,
 ) {
     var text by remember(value) { mutableStateOf(value.toString()) }
+    // The last value handed to onChange that `value` has not caught up with
+    // yet. Done commits and then clears focus, which commits again on blur;
+    // without this the second commit would repeat the same write.
+    var sent by remember(value) { mutableStateOf<Int?>(null) }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // Committing on every keystroke fights the clamp: typing "0" below the
     // floor calls onChange(min), which can equal the value already in effect,
@@ -478,7 +486,8 @@ private fun PercentInputRow(
     // empty) while the user is still typing.
     fun commit() {
         val clamped = text.toIntOrNull()?.coerceIn(min, 100)
-        if (clamped != null && clamped != value) {
+        if (clamped != null && clamped != value && clamped != sent) {
+            sent = clamped
             onChange(clamped)
         }
         text = (clamped ?: value).toString()
@@ -513,7 +522,13 @@ private fun PercentInputRow(
             textStyle = TextStyle(color = Color.White, fontSize = 16.sp, textAlign = TextAlign.End),
             cursorBrush = SolidColor(Color.White),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { commit() }),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    commit()
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                },
+            ),
             modifier = Modifier
                 .width(44.dp)
                 .border(

@@ -84,6 +84,8 @@ data class SettingsUiState(
     val showAudiobooks: Boolean = false,
     val subtitleAppearance: org.siloserver.silo.model.settings.SubtitleAppearance =
         org.siloserver.silo.model.settings.SubtitleAppearance.DEFAULT,
+    /** False when the server is known to discard subtitle text opacity. */
+    val subtitleTextOpacitySupported: Boolean = true,
     // Up Next card: auto-play the next episode at countdown expiry, and how
     // many seconds before the end to surface the card (0 = only at end).
     val autoPlayNext: Boolean = true,
@@ -279,6 +281,9 @@ class SettingsViewModel(
         }.launchIn(viewModelScope)
         playerSettingsStore.subtitleAppearanceFlow.onEach { appearance ->
             _uiState.update { it.copy(subtitleAppearance = appearance) }
+        }.launchIn(viewModelScope)
+        playerSettingsStore.subtitleTextOpacitySupportedFlow.onEach { supported ->
+            _uiState.update { it.copy(subtitleTextOpacitySupported = supported) }
         }.launchIn(viewModelScope)    }
 
     fun setDownloadsWifiOnly(value: Boolean) {

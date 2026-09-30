@@ -384,6 +384,52 @@ class AndroidPlayerSettingsStoreTest {
     }
 
     @Test
+    fun `text opacity is offered unless the active server is known to be below revision 14`() = runTest {
+        var active = serverUrl
+        var revision: ApiResult<org.siloserver.silo.model.settings.SettingsContractCapabilities> =
+            ApiResult.NetworkError(IllegalStateException("offline"))
+        val contractRevision = SettingsContractRevision({ revision }, { active })
+        val store = AndroidPlayerSettingsStore(
+            context = mockContextStub(),
+            legacyCache = fakeLegacyCache,
+            getActiveProfileId = { activeProfileId },
+            getServerUrl = { active },
+            serverSettingsFlusher = fakeFlusher,
+            settingsRepository = SettingsRepository(FakeSettingsApi()),
+            getDeviceId = { null },
+            contractRevision = contractRevision,
+            dataStoreFactory = { id ->
+                PreferenceDataStoreFactory.create(produceFile = { File(tempFolder.root, "ds_rev_$id.preferences_pb") })
+            },
+        )
+
+        // Unknown: offered, since the flusher holds the value until it is known.
+        store.refreshFromServer()
+        assertTrue(store.subtitleTextOpacitySupportedFlow.first())
+
+        // The refresh re-reads the revision before it pushes.
+        revision = capabilitiesAt(13)
+        store.refreshFromServer()
+        assertFalse(store.subtitleTextOpacitySupportedFlow.first())
+
+        // A revision known for another server says nothing about this one.
+        active = "https://other.example"
+        assertTrue(store.subtitleTextOpacitySupportedFlow.first())
+
+        active = serverUrl
+        revision = capabilitiesAt(14)
+        store.refreshFromServer()
+        assertTrue(store.subtitleTextOpacitySupportedFlow.first())
+    }
+
+    private fun capabilitiesAt(revision: Int): ApiResult<org.siloserver.silo.model.settings.SettingsContractCapabilities> =
+        ApiResult.Success(
+            org.siloserver.silo.model.settings.SettingsContractCapabilities(
+                apiVersion = 1, manifestRevision = revision, supportsBatchedEffective = true,
+            ),
+        )
+
+    @Test
     fun `setPlaybackSpeed clamps out-of-range values`() = runTest {
         val store = newStore()
         store.setPlaybackSpeed(10.0)

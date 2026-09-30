@@ -129,6 +129,15 @@ interface PlayerSettingsStore {
     /** [subtitleAppearanceFlow] with the match-device override applied. */
     val effectiveSubtitleAppearanceFlow: Flow<org.siloserver.silo.model.settings.SubtitleAppearance>
 
+    /**
+     * False only when the active server is known to run a settings manifest
+     * older than [SubtitleAppearance.TEXT_OPACITY_MIN_MANIFEST_REVISION], so it
+     * would discard [SubtitleAppearance.textOpacity]. An unknown revision
+     * counts as supported: the flusher holds the value until it is known.
+     */
+    val subtitleTextOpacitySupportedFlow: Flow<Boolean>
+        get() = flowOf(true)
+
     // Setters
     suspend fun setIntroSkipMode(value: IntroSkipMode)
 

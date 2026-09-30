@@ -768,6 +768,9 @@ class PlayerViewModel(
     // (then the OS captioning style, tvOS parity).
     val subtitleAppearance: StateFlow<SubtitleAppearance> = playerSettingsStore.effectiveSubtitleAppearanceFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, SubtitleAppearance.DEFAULT)
+    /** False when the server is known to discard subtitle text opacity. */
+    val subtitleTextOpacitySupported: StateFlow<Boolean> = playerSettingsStore.subtitleTextOpacitySupportedFlow
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
     /**
      * Per-device audio/subtitle delay in ms. Mirrors iOS phone's `audioSyncMs` /
      * `subtitleSyncMs` (`iosApp/Screens/Player/Sheets/PlayerSettingsSheet.swift:265-285`).

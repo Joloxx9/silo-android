@@ -114,6 +114,8 @@ class TvSettingsViewModel(
         val subtitleAppearance: SubtitleAppearance = SubtitleAppearance.DEFAULT,
         val effectiveSubtitleAppearance: SubtitleAppearance = SubtitleAppearance.DEFAULT,
         val subtitleUsesDeviceOverride: Boolean = false,
+        /** False when the server is known to discard subtitle text opacity. */
+        val subtitleTextOpacitySupported: Boolean = true,
         val autoPlayNext: Boolean = true,
         val introSkipMode: IntroSkipMode = IntroSkipMode.Default,
         val matchContentFrameRate: Boolean = false,
@@ -406,6 +408,11 @@ class TvSettingsViewModel(
         viewModelScope.launch {
             playerSettingsStore.effectiveSubtitleAppearanceFlow.collect { appearance ->
                 _uiState.update { it.copy(effectiveSubtitleAppearance = appearance) }
+            }
+        }
+        viewModelScope.launch {
+            playerSettingsStore.subtitleTextOpacitySupportedFlow.collect { supported ->
+                _uiState.update { it.copy(subtitleTextOpacitySupported = supported) }
             }
         }
     }

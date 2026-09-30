@@ -51,6 +51,8 @@ class AndroidPlayerSettingsStore(
     private val getDeviceId: suspend () -> String? = { null },
     private val serverChangeSignal: Flow<Unit> = flowOf(Unit),
     private val getAuthScope: suspend () -> org.siloserver.silo.network.AuthScopeSnapshot? = { null },
+    /** Null in tests that never reach a server; text opacity then counts as supported. */
+    private val contractRevision: SettingsContractRevision? = null,
     private val dataStoreFactory: (profileId: String) -> DataStore<Preferences> = { profileId ->
         PreferenceDataStoreFactory.create(
             produceFile = { context.preferencesDataStoreFile(fileNameFor(profileId)) },
@@ -400,6 +402,17 @@ class AndroidPlayerSettingsStore(
             if (matchDevice) deviceCaptioningAppearance(context, appearance) else appearance
         }
 
+    override val subtitleTextOpacitySupportedFlow: Flow<Boolean> =
+        if (contractRevision == null) {
+            flowOf(true)
+        } else {
+            combine(currentScopeFlow, contractRevision.known) { scope, known ->
+                val revision = known?.takeIf { scope != null && it.serverUrl == scope.serverUrl }
+                    ?.manifestRevision
+                revision == null || SubtitleAppearance.supportsTextOpacity(revision)
+            }.distinctUntilChanged()
+        }
+
     override suspend fun setSubtitleMatchesDevice(enabled: Boolean) =
         writeBoolLocal(PlaybackSettingsKeys.SubtitleMatchesDevice, enabled)
 
@@ -606,6 +619,13 @@ class AndroidPlayerSettingsStore(
         // restarting the session in place reverted the toggle every time.
         // Draining first makes the pull observe the write. Offline, both
         // fail and the local value stands.
+        //
+        // Re-read the server's settings revision first, so the push below
+        // gates revision-dependent fields on a current answer and a server
+        // upgraded while the app ran is noticed.
+        contractRevision?.let { revision ->
+            getServerUrl()?.takeIf { it.isNotBlank() }?.let { url -> runCatching { revision.refresh(url) } }
+        }
         runCatching { serverSettingsFlusher.flushNow() }
         withScope { scope, store ->
             // Batched canonical resolution: one request answers every

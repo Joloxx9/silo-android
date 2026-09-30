@@ -109,6 +109,7 @@ fun SettingsScreen(
     org.siloserver.silo.android.ui.screens.player.SubtitleStyleSheet(
         isVisible = subtitleStyleVisible,
         appearance = state.subtitleAppearance,
+        showTextOpacity = state.subtitleTextOpacitySupported,
         onUpdate = viewModel::editSubtitleAppearance,
         onDismiss = { subtitleStyleVisible = false },
     )

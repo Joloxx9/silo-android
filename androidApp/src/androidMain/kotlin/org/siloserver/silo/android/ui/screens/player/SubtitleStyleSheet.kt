@@ -78,6 +78,9 @@ fun SubtitleStyleSheet(
     appearance: SubtitleAppearance,
     onUpdate: ((SubtitleAppearance) -> SubtitleAppearance) -> Unit,
     onDismiss: () -> Unit,
+    // False when the server is known to discard text opacity; the row is
+    // hidden rather than offering a value that will not be kept.
+    showTextOpacity: Boolean = true,
     // Gear-submenu back affordance: dismisses this sheet and reopens the
     // parent settings sheet (wired in PlayerOverlay).
     onBack: (() -> Unit)? = null,
@@ -154,14 +157,16 @@ fun SubtitleStyleSheet(
                     },
                 )
 
-                PercentInputRow(
-                    label = "Text Opacity",
-                    value = appearance.textOpacity,
-                    min = 1,
-                    onChange = { value ->
-                        onUpdate { it.copy(textOpacity = value).sanitized() }
-                    },
-                )
+                if (showTextOpacity) {
+                    PercentInputRow(
+                        label = "Text Opacity",
+                        value = appearance.textOpacity,
+                        min = 1,
+                        onChange = { value ->
+                            onUpdate { it.copy(textOpacity = value).sanitized() }
+                        },
+                    )
+                }
 
                 // ---- Background section -----------------------------------------
                 SectionHeader("Background")

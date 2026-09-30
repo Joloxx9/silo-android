@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 /**
  * `wire` repeats what each `@SerialName` declares. It is spelled out as a
@@ -97,6 +98,31 @@ data class SubtitleAppearance(
         const val MONOSPACE: String = "monospace"
 
         val DEFAULT: SubtitleAppearance = SubtitleAppearance()
+
+        /** Wire name of [textOpacity] inside the `playback.subtitle_appearance` object. */
+        const val TEXT_OPACITY_FIELD: String = "textOpacity"
+
+        /**
+         * First settings manifest revision whose `playback.subtitle_appearance`
+         * schema knows [textOpacity]. The schema sets additionalProperties to
+         * false, so an older server rejects the whole object when it carries
+         * the field.
+         */
+        const val TEXT_OPACITY_MIN_MANIFEST_REVISION: Int = 14
+
+        fun supportsTextOpacity(manifestRevision: Int): Boolean =
+            manifestRevision >= TEXT_OPACITY_MIN_MANIFEST_REVISION
+
+        /**
+         * [wire] as a server at [manifestRevision] accepts it: [TEXT_OPACITY_FIELD]
+         * is removed below [TEXT_OPACITY_MIN_MANIFEST_REVISION] and kept otherwise.
+         */
+        fun wireObjectForRevision(wire: JsonObject, manifestRevision: Int): JsonObject =
+            if (supportsTextOpacity(manifestRevision) || TEXT_OPACITY_FIELD !in wire) {
+                wire
+            } else {
+                JsonObject(wire - TEXT_OPACITY_FIELD)
+            }
 
         private val JSON = Json {
             encodeDefaults = true

@@ -1593,12 +1593,14 @@ private fun TvSubtitleSettingsPane(
                         onClick = { activePicker = SubtitlePicker.FontColor },
                         enabled = state.subtitleUsesDeviceOverride,
                     )
-                    SettingsValueRow(
-                        label = "Text Opacity",
-                        value = "${appearance.textOpacity}%",
-                        onClick = { activePicker = SubtitlePicker.TextOpacity },
-                        enabled = state.subtitleUsesDeviceOverride,
-                    )
+                    if (state.subtitleTextOpacitySupported) {
+                        SettingsValueRow(
+                            label = "Text Opacity",
+                            value = "${appearance.textOpacity}%",
+                            onClick = { activePicker = SubtitlePicker.TextOpacity },
+                            enabled = state.subtitleUsesDeviceOverride,
+                        )
+                    }
                     SettingsToggleRow(
                         label = "Text Outline",
                         checked = appearance.textOutline,

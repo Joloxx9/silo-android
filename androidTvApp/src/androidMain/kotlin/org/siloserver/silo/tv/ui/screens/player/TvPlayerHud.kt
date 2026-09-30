@@ -204,6 +204,8 @@ internal fun TvPlayerHud(
     onSubtitleDelayChanged: (Int) -> Unit,
     subtitleAppearance: SubtitleAppearance,
     onSubtitleAppearanceChanged: (SubtitleAppearance) -> Unit,
+    /** False when the server is known to discard subtitle text opacity. */
+    subtitleTextOpacitySupported: Boolean = true,
     onSubtitlesPaneShown: () -> Unit,
     onSearchSubtitles: (() -> Unit)?,
     onTranslateWithAi: (() -> Unit)?,
@@ -546,6 +548,7 @@ internal fun TvPlayerHud(
                         onSubtitleDelayChanged = onSubtitleDelayChanged,
                         appearance = subtitleAppearance,
                         onAppearanceChanged = onSubtitleAppearanceChanged,
+                        showTextOpacity = subtitleTextOpacitySupported,
                         onPaneShown = onSubtitlesPaneShown,
                         onSearchSubtitles = onSearchSubtitles,
                         onTranslateWithAi = onTranslateWithAi,
@@ -1482,6 +1485,7 @@ private fun HudSubtitlesPane(
     onSubtitleDelayChanged: (Int) -> Unit,
     appearance: SubtitleAppearance,
     onAppearanceChanged: (SubtitleAppearance) -> Unit,
+    showTextOpacity: Boolean,
     onPaneShown: () -> Unit,
     onSearchSubtitles: (() -> Unit)?,
     onTranslateWithAi: (() -> Unit)?,
@@ -1627,29 +1631,31 @@ private fun HudSubtitlesPane(
                     },
                 )
 
-                HudFocusedSettingRow(
-                    label = "Text Opacity",
-                    value = "${appearance.textOpacity}%",
-                    enabled = stylingEnabled,
-                    rightFocusRequester = subtitleTextColorFocus,
-                    onActivate = {
-                        onPresentPicker(
-                            HudPickerPresentation(
-                                title = "Text Opacity",
-                                options = TvSubtitleAppearanceOptions.percentOptions(
-                                    TEXT_OPACITY_STEPS,
-                                    appearance.textOpacity,
-                                ).map { HudPickerOption(it.toString(), "$it%") },
-                                selectedId = appearance.textOpacity.toString(),
-                                onSelect = { id ->
-                                    id.toIntOrNull()?.let {
-                                        onAppearanceChanged(appearance.copy(textOpacity = it))
-                                    }
-                                },
-                            ),
-                        )
-                    },
-                )
+                if (showTextOpacity) {
+                    HudFocusedSettingRow(
+                        label = "Text Opacity",
+                        value = "${appearance.textOpacity}%",
+                        enabled = stylingEnabled,
+                        rightFocusRequester = subtitleTextColorFocus,
+                        onActivate = {
+                            onPresentPicker(
+                                HudPickerPresentation(
+                                    title = "Text Opacity",
+                                    options = TvSubtitleAppearanceOptions.percentOptions(
+                                        TEXT_OPACITY_STEPS,
+                                        appearance.textOpacity,
+                                    ).map { HudPickerOption(it.toString(), "$it%") },
+                                    selectedId = appearance.textOpacity.toString(),
+                                    onSelect = { id ->
+                                        id.toIntOrNull()?.let {
+                                            onAppearanceChanged(appearance.copy(textOpacity = it))
+                                        }
+                                    },
+                                ),
+                            )
+                        },
+                    )
+                }
 
                 HudFocusedSettingRow(
                     label = "Background",

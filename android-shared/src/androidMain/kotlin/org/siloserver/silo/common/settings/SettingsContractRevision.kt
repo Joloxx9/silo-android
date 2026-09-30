@@ -54,15 +54,22 @@ class SettingsContractRevision(
         _known.value?.takeIf { it.serverUrl == serverUrl }?.manifestRevision
 
     private suspend fun probe(serverUrl: String): Int? {
-        val active = runCatching { getServerUrl() }.getOrNull()
-        if (active != null && active != serverUrl) return null
+        if (!isActive(serverUrl)) return null
         val revision = when (val result = fetchCapabilities()) {
             is ApiResult.Success -> result.data.manifestRevision
             // No capabilities route: the server predates every revision gate.
             is ApiResult.Error -> if (result.code == 404) 0 else null
             is ApiResult.NetworkError -> null
         } ?: return null
+        // The request goes to whichever server is active when it is sent, so a
+        // switch during the fetch means the answer describes another server.
+        if (!isActive(serverUrl)) return null
         _known.value = Known(serverUrl, revision)
         return revision
+    }
+
+    private suspend fun isActive(serverUrl: String): Boolean {
+        val active = runCatching { getServerUrl() }.getOrNull()
+        return active == null || active == serverUrl
     }
 }

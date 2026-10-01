@@ -38,8 +38,10 @@ import androidx.compose.ui.unit.dp
 import org.siloserver.silo.android.ui.components.SiloTopBar
 import org.siloserver.silo.android.ui.components.EmptyStateView
 import org.siloserver.silo.android.ui.components.LoadingIndicator
+import org.siloserver.silo.common.ui.RatingEntry
 import org.siloserver.silo.common.ui.components.DeferImagePresentationWhileScrolling
 import org.siloserver.silo.common.ui.components.ThumbhashImage
+import org.siloserver.silo.model.catalog.ExternalRatings
 import org.siloserver.silo.model.request.RequestMediaDetail
 import org.siloserver.silo.model.request.RequestMediaResult
 import org.siloserver.silo.model.request.reasonMessage
@@ -175,11 +177,22 @@ private fun RequestDetailContent(
                         fontWeight = FontWeight.Bold,
                     )
                     RequestMetaLine(mediaType = detail.mediaType, year = detail.year)
-                    Text(
-                        text = detail.basicFacts(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    val tmdbRating = ExternalRatings.tmdb(detail.voteAverage)
+                    detail.basicFacts(hasRating = tmdbRating != null)?.let { facts ->
+                        Text(
+                            text = facts,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    tmdbRating?.let { rating ->
+                        RatingEntry(
+                            rating = rating,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                        )
+                    }
                     RequestActions(
                         detail = detail,
                         isSubmitting = isSubmitting,
@@ -336,12 +349,15 @@ private fun RequestDetailStatus(detail: RequestMediaDetail) {
     )
 }
 
-private fun RequestMediaDetail.basicFacts(): String {
+/**
+ * Runtime, genres and seasons. With none of those, the availability label
+ * fills the line, unless a rating already shows below it.
+ */
+private fun RequestMediaDetail.basicFacts(hasRating: Boolean): String? {
     val facts = buildList {
         runtime?.let { add("${it}m") }
         if (genres.isNotEmpty()) add(genres.take(2).joinToString(", "))
-        voteAverage?.let { add("TMDB ${"%.1f".format(it)}") }
         if (numberOfSeasons != null) add("$numberOfSeasons seasons")
     }
-    return facts.joinToString(" • ").ifBlank { availability.requestDisplayLabel() }
+    return facts.joinToString(" • ").ifBlank { if (hasRating) null else availability.requestDisplayLabel() }
 }

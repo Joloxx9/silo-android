@@ -44,6 +44,7 @@ import androidx.tv.material3.ExperimentalTvMaterial3Api
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import org.siloserver.silo.common.ui.components.ThumbhashImage
+import org.siloserver.silo.model.catalog.ExternalRatings
 import org.siloserver.silo.model.request.RequestMediaDetail
 import org.siloserver.silo.model.request.RequestState
 import org.siloserver.silo.model.request.reasonMessage
@@ -51,6 +52,8 @@ import org.siloserver.silo.model.request.requestBackdropUrl
 import org.siloserver.silo.model.request.requestDisplayLabel
 import org.siloserver.silo.model.request.requestPosterUrl
 import org.siloserver.silo.tv.ui.components.TvErrorScreen
+import org.siloserver.silo.tv.ui.components.TvFactsRow
+import org.siloserver.silo.tv.ui.components.TvHeroFactToken
 import org.siloserver.silo.tv.ui.components.TvLoadingScreen
 import org.siloserver.silo.tv.ui.focus.TvContentInitialFocusMaxAttempts
 import org.siloserver.silo.tv.ui.focus.TvObservedFocusResult
@@ -283,22 +286,7 @@ private fun RequestDetailContent(
                     overflow = TextOverflow.Ellipsis,
                 )
 
-                val meta = buildList {
-                    detail.year?.takeIf { it > 0 }?.let { add(it.toString()) }
-                    detail.runtime?.takeIf { it > 0 }?.let { add("${it} min") }
-                    detail.contentRating.takeIf { it.isNotBlank() }?.let { add(it) }
-                    detail.voteAverage?.takeIf { it > 0 }?.let { add("★ ${"%.1f".format(it)}") }
-                    detail.genres.take(3).takeIf { it.isNotEmpty() }?.let { add(it.joinToString(" · ")) }
-                }.joinToString("  ·  ")
-                if (meta.isNotBlank()) {
-                    Text(
-                        text = meta,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                RequestMetaLine(detail)
 
                 if (detail.tagline.isNotBlank()) {
                     Text(
@@ -349,6 +337,26 @@ private fun RequestDetailContent(
             }
         }
     }
+}
+
+/** `2024 · 128 min · PG-13 · TMDB 7.8 · Drama · Crime`; past the width, whole facts drop from the end. */
+@Composable
+private fun RequestMetaLine(detail: RequestMediaDetail) {
+    val tokens = buildList {
+        detail.year?.takeIf { it > 0 }?.let { add(TvHeroFactToken.TextToken(it.toString())) }
+        detail.runtime?.takeIf { it > 0 }?.let { add(TvHeroFactToken.TextToken("$it min")) }
+        detail.contentRating.takeIf { it.isNotBlank() }?.let { add(TvHeroFactToken.TextToken(it)) }
+        ExternalRatings.tmdb(detail.voteAverage)?.let { add(TvHeroFactToken.ExternalRating(it)) }
+        detail.genres.take(3).forEach { add(TvHeroFactToken.TextToken(it)) }
+    }
+    if (tokens.isEmpty()) return
+    TvFactsRow(
+        tokens = tokens,
+        style = MaterialTheme.typography.titleMedium.copy(
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+        spacing = 10.dp,
+    )
 }
 
 /**

@@ -29,10 +29,12 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.tv.material3.LocalTextStyle
 import androidx.tv.material3.Text
 import org.siloserver.silo.common.ui.components.ThumbhashImage
 import org.siloserver.silo.tv.ui.theme.SiloOnSurface
@@ -192,13 +194,16 @@ private fun TvMarqueeBlock(
             ) {
                 content.badges.forEach { badge -> MarqueeBadge(badge) }
                 if (content.metaParts.isNotEmpty()) {
-                    Text(
-                        text = content.metaParts.joinToString(" · "),
-                        color = SiloSecondaryText,
-                        fontSize = MarqueeMetaSize,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                    TvFactsRow(
+                        tokens = content.metaParts,
+                        style = LocalTextStyle.current.merge(
+                            TextStyle(
+                                color = SiloSecondaryText,
+                                fontSize = MarqueeMetaSize,
+                                fontWeight = FontWeight.Medium,
+                            ),
+                        ),
+                        spacing = MarqueeMetaGap,
                     )
                 }
             }
@@ -302,6 +307,9 @@ private val MarqueeLogoMaxHeight = 84.dp
 private val MarqueeDetailLineHeight = 20.dp
 private val MarqueeTitleSize = 44.sp
 private val MarqueeMetaSize = 14.sp
+
+/** About a space at [MarqueeMetaSize], so `·` spacing matches the joined text. */
+private val MarqueeMetaGap = 4.dp
 private val MarqueeDetailSize = 14.sp
 private val MarqueeSynopsisSize = 16.sp
 private val MarqueeBadgeSize = 10.5.sp

@@ -77,7 +77,16 @@ import org.siloserver.silo.model.playback.resolvedSelectedSubtitleIndex
 import org.siloserver.silo.model.playback.resolvePlaybackStartPosition
 import org.siloserver.silo.playback.PlaybackSubtitleReady
 import org.siloserver.silo.playback.PlaybackSubtitleTimingChanged
-import org.siloserver.silo.playback.affects
+import org.siloserver.silo.playback.PlaybackSubtitleSyncUpdated
+import org.siloserver.silo.playback.SubtitleSyncController
+import org.siloserver.silo.playback.SubtitleSyncFeedbackTracker
+import org.siloserver.silo.playback.SubtitleSyncNotice
+import org.siloserver.silo.playback.SubtitleSyncUiState
+import org.siloserver.silo.playback.feedbackInput
+import org.siloserver.silo.playback.includesSyncKey
+import org.siloserver.silo.playback.activeSyncKey
+import org.siloserver.silo.model.subtitles.SubtitleSyncState
+import org.siloserver.silo.common.player.subtitleSyncName
 import org.siloserver.silo.playback.applyAuthoritativeSubtitleReadyTrack
 import org.siloserver.silo.model.subtitles.SubtitleAiJob
 import org.siloserver.silo.model.subtitles.SubtitleAiQuota
@@ -131,6 +140,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
@@ -479,6 +489,12 @@ class PlayerViewModel(
          */
         val subtitleRefreshNonce: Int = 0,
         /**
+         * Grows per sync key each time a syncable subtitle's timing changed
+         * and its cues must be fetched again. The mount that carries a
+         * revision reports it back, so sync feedback knows the new cues show.
+         */
+        val subtitleCueRevisions: Map<String, Int> = emptyMap(),
+        /**
          * True when [audioTracks] come from a download's offline manifest and
          * list the local file's own audio tracks in file order, so an audio
          * choice selects the Media3 audio group at the same position.
@@ -821,6 +837,44 @@ class PlayerViewModel(
     private val _subtitleTools = MutableStateFlow(SubtitleToolsUiState())
     val subtitleTools: StateFlow<SubtitleToolsUiState> = _subtitleTools.asStateFlow()
 
+    // Timing and sync state of the playing file's syncable subtitles, and
+    // the card that follows a sync this viewer started.
+    private val subtitleSync = SubtitleSyncController(
+        subtitlesRepository,
+        viewModelScope,
+        onTimingChanged = ::onSubtitleSyncTimingChanged,
+    )
+    val subtitleSyncState: StateFlow<SubtitleSyncUiState> = subtitleSync.state
+    private val subtitleSyncFeedback = SubtitleSyncFeedbackTracker(viewModelScope)
+    val subtitleSyncNotice: StateFlow<SubtitleSyncNotice?> = subtitleSyncFeedback.notice
+    /** The cue revision of each sync key whose cues the player has in use. */
+    private val loadedSubtitleCueRevisions = MutableStateFlow<Map<String, Int>>(emptyMap())
+    /** Cue revisions of the last subtitle mount, until Media3 selects its subtitle track. */
+    private var mountedSubtitleCueRevisions: Map<String, Int> = emptyMap()
+
+    fun requestSubtitleSync(key: String) = subtitleSync.requestSync(key)
+
+    fun resetSubtitleTiming(key: String) = subtitleSync.resetTiming(key)
+
+    fun dismissSubtitleSyncNotice() = subtitleSyncFeedback.dismiss()
+
+    /**
+     * The player mounted subtitles built from a state carrying [revisions].
+     * Media3 fetches them after the mount returns, so they count as loaded
+     * only once [onMountedSubtitleSelected] reports the track in use.
+     */
+    internal fun onSubtitleCuesMounted(revisions: Map<String, Int>) {
+        mountedSubtitleCueRevisions = revisions
+    }
+
+    /** Media3 selected the mounted subtitle track on the live player: its cues are in use. */
+    internal fun onMountedSubtitleSelected() {
+        val revisions = mountedSubtitleCueRevisions
+        if (revisions.isEmpty()) return
+        mountedSubtitleCueRevisions = emptyMap()
+        loadedSubtitleCueRevisions.update { it + revisions }
+    }
+
     private var aiStatusFetched = false
     private var searchJob: Job? = null
     private var aiJobHandle: Job? = null
@@ -871,6 +925,38 @@ class PlayerViewModel(
                 .map { it.mediaFileId }
                 .distinctUntilChanged()
                 .collect { org.siloserver.silo.common.player.ActivePlaybackFile.set(it) }
+        }
+        // Subtitle sync applies to server playback only; offline and local
+        // files have no inventory sync keys.
+        viewModelScope.launch {
+            _uiState
+                .map { state ->
+                    state.mediaFileId?.takeIf { state.sessionId != null } to
+                        state.subtitleTracks.mapNotNullTo(mutableSetOf()) { it.syncKey }
+                }
+                .distinctUntilChanged()
+                .collect { (mediaFileId, syncKeys) -> subtitleSync.bind(mediaFileId, syncKeys) }
+        }
+        viewModelScope.launch {
+            val screen = _uiState
+                .map { state ->
+                    val activeKey = state.sessionId?.let {
+                        val selected = state.localSubtitleMountIdentity ?: state.committedSubtitleIdentity
+                        state.subtitleTracks.activeSyncKey(
+                            selected,
+                            mounted = subtitlesForVideoMediaMount(
+                                subtitles = state.subtitleTracks,
+                                playbackPlan = state.playbackPlan,
+                                subtitleIdentity = selected,
+                            ),
+                        )
+                    }
+                    Triple(activeKey, state.subtitleCueRevisions, state.subtitleTracks)
+                }
+                .distinctUntilChanged()
+            combine(subtitleSync.state, screen, loadedSubtitleCueRevisions) { sync, (activeKey, revisions, tracks), loaded ->
+                sync.feedbackInput(activeKey, revisions, loaded) { subtitleSyncName(tracks, it) }
+            }.collect(subtitleSyncFeedback::update)
         }
         // Mirror the screen error into the adb test hook — screen-level
         // failures (terminal server plans) never reach the Media3 player, so
@@ -3671,6 +3757,8 @@ class PlayerViewModel(
      * "Translate with AI…" row is hidden (no error surfaced).
      */
     fun onTracksSheetOpened() {
+        // Opening re-reads sync state so a job that finished meanwhile shows.
+        subtitleSync.reload()
         if (aiStatusFetched) return
         aiStatusFetched = true
         viewModelScope.launch {
@@ -3739,6 +3827,8 @@ class PlayerViewModel(
             if (generation != subtitleDownloadGeneration || _uiState.value.mediaFileId != mediaFileId || _uiState.value.sessionId != sessionId) return@launch
             when (r) {
                 is ApiResult.Success -> {
+                    // Follows the automatic sync the server starts for a new download.
+                    subtitleSync.remember(r.data.subtitle)
                     doRefreshSubtitles(autoSelectSubtitleId = r.data.subtitle.id)
                     if (generation != subtitleDownloadGeneration || _uiState.value.mediaFileId != mediaFileId || _uiState.value.sessionId != sessionId) return@launch
                     _subtitleTools.update { it.copy(downloadingKey = null, downloadCompleted = true) }
@@ -3803,22 +3893,47 @@ class PlayerViewModel(
     }
 
     /**
-     * The server retimed a stored subtitle (sync or timing reset). Media3
-     * keeps the cues it already parsed, so when that subtitle is the mounted
-     * sidecar, remount the same item at the same position to fetch it again.
+     * The server retimed a subtitle of the file, stored or a sidecar (a sync,
+     * or a timing set or reset). The sync controller re-reads it and reports
+     * the change through [onSubtitleSyncTimingChanged].
      */
     fun applySubtitleTimingChanged(update: PlaybackSubtitleTimingChanged) {
         val state = _uiState.value
         val sessionId = state.sessionId ?: return
         if (update.sessionId != null && update.sessionId != sessionId) return
         if (update.mediaFileId != null && update.mediaFileId != state.mediaFileId) return
-        val mounted = subtitlesForVideoMediaMount(
-            subtitles = state.subtitleTracks,
-            playbackPlan = state.playbackPlan,
-            subtitleIdentity = state.localSubtitleMountIdentity ?: state.committedSubtitleIdentity,
-        )
-        if (!update.affects(mounted)) return
-        _uiState.update { it.copy(subtitleRefreshNonce = it.subtitleRefreshNonce + 1) }
+        val key = update.syncKey ?: update.subtitleId?.let(SubtitleSyncState::storedKey) ?: return
+        subtitleSync.timingChanged(key)
+    }
+
+    /** A step of a sync job of the file (realtime): progress, then the outcome. */
+    fun applySubtitleSyncUpdated(update: PlaybackSubtitleSyncUpdated?) {
+        update ?: return
+        val state = _uiState.value
+        val sessionId = state.sessionId ?: return
+        if (update.sessionId != null && update.sessionId != sessionId) return
+        if (update.mediaFileId != null && update.mediaFileId != state.mediaFileId) return
+        subtitleSync.syncUpdated(update)
+    }
+
+    /**
+     * A syncable subtitle's timing changed. Media3 keeps the cues it already
+     * parsed, so when that subtitle is the mounted sidecar, remount the same
+     * item at the same position to fetch it again. Its cue revision tells the
+     * sync feedback when the new cues show.
+     */
+    private fun onSubtitleSyncTimingChanged(key: String) {
+        _uiState.update { state ->
+            val mounted = state.sessionId != null && subtitlesForVideoMediaMount(
+                subtitles = state.subtitleTracks,
+                playbackPlan = state.playbackPlan,
+                subtitleIdentity = state.localSubtitleMountIdentity ?: state.committedSubtitleIdentity,
+            ).includesSyncKey(key)
+            state.copy(
+                subtitleCueRevisions = state.subtitleCueRevisions + (key to (state.subtitleCueRevisions[key] ?: 0) + 1),
+                subtitleRefreshNonce = if (mounted) state.subtitleRefreshNonce + 1 else state.subtitleRefreshNonce,
+            )
+        }
     }
 
     private suspend fun doRefreshSubtitles(autoSelectSubtitleId: Int?) {

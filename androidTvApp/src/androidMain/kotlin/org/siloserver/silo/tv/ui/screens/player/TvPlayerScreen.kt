@@ -2,6 +2,7 @@
 
 package org.siloserver.silo.tv.ui.screens.player
 
+import org.siloserver.silo.playback.SubtitleSyncNotice
 import android.app.Activity
 import android.content.ComponentName
 import android.graphics.Rect
@@ -89,6 +90,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -322,6 +324,7 @@ fun TvPlayerScreen(
     // swap. Mirrors phone PlayerScreen. The MediaController is kept for transport.
     val sessionPlayer by activePlayerHolder.player.collectAsState()
     val notice by viewModel.notice.collectAsState()
+    val hudSubtitleSync by viewModel.hudSubtitleSync.collectAsState()
     val remoteMessage by viewModel.remoteMessage.collectAsState()
     LaunchedEffect(remoteMessage?.id) {
         if (remoteMessage != null) {
@@ -1567,6 +1570,11 @@ fun TvPlayerScreen(
                     // Quality is a server-transcode ladder built by the VM at
                     // session load (tvOS parity), not the adaptive variants.
                     viewModel.onTracksChanged(audio, subtitle, video)
+                    // Read the live tracks, not the event's: a callback queued
+                    // before a remount still describes the outgoing item.
+                    if (controller.currentTracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }) {
+                        viewModel.onMountedSubtitleSelected()
+                    }
                 }
                 override fun onVideoSizeChanged(videoSize: VideoSize) {
                     // MediaController doesn't expose ExoPlayer's `videoFormat`
@@ -1831,6 +1839,7 @@ fun TvPlayerScreen(
         backend.mount(mediaSpec, playWhenReady = !viewModel.uiState.value.isPaused)
         mountedTransportNonce = state.transportMountNonce
         viewModel.onTransportMountApplied(state.transportMountNonce)
+        viewModel.onSubtitleCuesMounted(state.subtitleCueRevisions)
     }
 
     // Subtitle refresh (search download / AI completion): Media3 cannot add
@@ -1883,6 +1892,7 @@ fun TvPlayerScreen(
             activeClaims = plan?.activeOriginalHttpClaims().orEmpty(),
         )
         backend.refresh(mediaSpec)
+        viewModel.onSubtitleCuesMounted(state.subtitleCueRevisions)
     }
 
     // The single path from the subtitle transaction adapter to the player.
@@ -2307,6 +2317,9 @@ fun TvPlayerScreen(
                             onSubtitleAppearanceChanged = viewModel::onSetSubtitleAppearance,
                             subtitleTextOpacitySupported = subtitleTextOpacitySupported,
                             onSubtitlesPaneShown = viewModel::onSubtitlesPaneShown,
+                            subtitleSync = hudSubtitleSync,
+                            onSyncSubtitle = viewModel::requestSubtitleSync,
+                            onResetSubtitleTiming = viewModel::resetSubtitleTiming,
                             onSearchSubtitles = if (state.mediaFileId != null) {
                                 {
                                     viewModel.closeHUD()
@@ -2471,6 +2484,7 @@ fun TvPlayerScreen(
         TvPlayerOverlays(
             isInPictureInPictureMode = isInPictureInPictureMode,
             notice = notice,
+            subtitleSyncNotice = viewModel.subtitleSyncNotice,
             remoteMessage = remoteMessage,
             roomSnapshot = roomSnapshot,
             roomActive = roomController != null,
@@ -3557,6 +3571,7 @@ internal fun selectVideoQuality(player: Player, id: String): Boolean {
 private fun TvPlayerOverlays(
     isInPictureInPictureMode: Boolean,
     notice: PlayerNotice?,
+    subtitleSyncNotice: StateFlow<SubtitleSyncNotice?>,
     remoteMessage: RemoteMessage?,
     roomSnapshot: RoomSnapshot?,
     roomActive: Boolean,
@@ -3601,6 +3616,22 @@ private fun TvPlayerOverlays(
                 contentAlignment = Alignment.TopStart,
             ) {
                 TvPlayerNoticeOverlay(notice = notice)
+            }
+        }
+
+        // Subtitle sync card (top-end): follows a sync this viewer started.
+        // Never focusable. The HUD's Timing row shows the same state and its
+        // tabs sit where the card would, so the card waits for the HUD to close.
+        if (!isInPictureInPictureMode) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 32.dp, end = 32.dp)
+                    .zIndex(9f),
+                contentAlignment = Alignment.TopEnd,
+            ) {
+                val syncNotice by subtitleSyncNotice.collectAsState()
+                TvSubtitleSyncCard(notice = syncNotice.takeUnless { hudOpen })
             }
         }
 

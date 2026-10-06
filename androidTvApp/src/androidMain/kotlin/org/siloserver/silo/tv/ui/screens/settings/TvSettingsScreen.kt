@@ -1143,7 +1143,6 @@ private fun TvPlaybackSettingsPane(
     onResetPlaybackOverrides: () -> Unit,
     seekIntervals: SeekIntervalSettingsModel? = null,
 ) {
-    val recovery = org.siloserver.silo.common.player.rememberPlaybackRecoverySettings(org.koin.compose.koinInject())
     var activePicker by remember { mutableStateOf<PlaybackPicker?>(null) }
     val seekState = seekIntervals?.state?.collectAsState()?.value
     var seekPicker by remember { mutableStateOf<Pair<SeekMedia, SeekDirection>?>(null) }
@@ -1292,17 +1291,6 @@ private fun TvPlaybackSettingsPane(
                     onRetry = { seekIntervals?.refresh() },
                     fallbackFocus = seekFallbackFocus,
                 )
-            }
-        }
-        if (recovery.visible) {
-            item {
-                SettingsGroup(title = "Playback Recovery") {
-                    SettingsActionRow(
-                        label = if (recovery.busy) "Recovering Playback…" else "Retry Pending Playback Stops",
-                        onClick = recovery.retry,
-                    )
-                    SettingsFooterText(text = recovery.message)
-                }
             }
         }
         item {

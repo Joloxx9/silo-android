@@ -72,6 +72,8 @@ class TvSiloCastReceiver(
     private val deviceIdProvider: () -> String,
     /** Suspends until the player's queued session teardown has finished. */
     private val awaitPlaybackTeardown: suspend () -> Unit,
+    /** True while this TV is in a Watch Party, whose membership an identity swap would end. */
+    private val inWatchParty: () -> Boolean = { false },
 ) {
     data class StandbyState(
         val controllerName: String?,
@@ -418,6 +420,20 @@ class TvSiloCastReceiver(
             }
             is SiloCastMessage.HandoffOffer -> {
                 val offer = message.handoffOffer
+                // A handoff swaps in the phone's profile, and any identity
+                // change leaves the Watch Party this TV is in.
+                if (inWatchParty()) {
+                    session.send(
+                        SiloCastMessage.HandoffCancel(
+                            SiloCastHandoffCancel(
+                                requestId = offer.requestId,
+                                reason = "watch_party_active",
+                                message = "Leave the Watch Party on the TV first.",
+                            ),
+                        ),
+                    )
+                    return true
+                }
                 val controllerId = session.controllerDeviceId
                 if (session.negotiatedVersion != SiloCastProtocol.version || controllerId == null) {
                     session.send(
@@ -520,6 +536,25 @@ class TvSiloCastReceiver(
             }
             is SiloCastMessage.Launch -> {
                 if (!requireAuthorized(session)) return true
+                // A Watch Party player is never silently replaced by a cast.
+                activePlayer?.adapter?.launchRefusal?.invoke()?.let { refusal ->
+                    session.send(
+                        SiloCastMessage.Error(
+                            SiloCastError(code = "watch_party_active", message = refusal),
+                        ),
+                    )
+                    return true
+                }
+                // In a party lobby no party player is registered yet, but a
+                // solo launch would still take the shared player from the room.
+                if (inWatchParty()) {
+                    session.send(
+                        SiloCastMessage.Error(
+                            SiloCastError(code = "watch_party_active", message = "Leave the Watch Party on the TV first."),
+                        ),
+                    )
+                    return true
+                }
                 if (!session.remoteLaunchReady || identityManager.activeIdentity == null) {
                     session.send(
                         SiloCastMessage.Error(

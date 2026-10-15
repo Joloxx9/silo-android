@@ -13,6 +13,18 @@ class WatchPartyPlayerSupportTest {
     private val offsetTimeline = PlaybackTimeline(timelineOffsetSeconds = 600.0)
 
     @Test
+    fun roomSkipsBuildOnTheOriginAndStayInsideTheMedia() {
+        // Two quick skips: the second starts from the first one's pending target.
+        val first = roomSkipTarget(originSeconds = 100.0, deltaSeconds = 10.0, durationSeconds = 3_000.0)
+        assertEquals(110.0, first)
+        assertEquals(120.0, roomSkipTarget(originSeconds = first, deltaSeconds = 10.0, durationSeconds = 3_000.0))
+        // Never past the end or before the start; an unknown duration does not cap.
+        assertEquals(3_000.0, roomSkipTarget(originSeconds = 2_995.0, deltaSeconds = 10.0, durationSeconds = 3_000.0))
+        assertEquals(0.0, roomSkipTarget(originSeconds = 4.0, deltaSeconds = -10.0, durationSeconds = 3_000.0))
+        assertEquals(4_010.0, roomSkipTarget(originSeconds = 4_000.0, deltaSeconds = 10.0, durationSeconds = 0.0))
+    }
+
+    @Test
     fun bufferedTargetMapsSourceTimeOntoThePlayerTimeline() {
         // Player at 10 s (source 610), buffered to player 40 s (source 640).
         assertTrue(roomTargetBufferedLocally(offsetTimeline, 630.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0))
@@ -22,6 +34,36 @@ class WatchPartyPlayerSupportTest {
         assertFalse(roomTargetBufferedLocally(offsetTimeline, 608.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0))
         // Before this stream's origin: only a re-anchor reaches it.
         assertFalse(roomTargetBufferedLocally(offsetTimeline, 30.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0))
+    }
+
+    @Test
+    fun aSeekableItemReachesAnyEarlierPointWithANativeSeek() {
+        // Player at 10 s (source 610): a member 3 s ahead of a paused room seeks back.
+        assertTrue(
+            roomTargetBufferedLocally(
+                offsetTimeline, 607.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0,
+                seekableBehindPlayhead = true,
+            ),
+        )
+        assertTrue(
+            roomTargetBufferedLocally(
+                offsetTimeline, 600.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0,
+                seekableBehindPlayhead = true,
+            ),
+        )
+        // Ahead of the buffer still needs new media, and before the origin a re-anchor.
+        assertFalse(
+            roomTargetBufferedLocally(
+                offsetTimeline, 641.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0,
+                seekableBehindPlayhead = true,
+            ),
+        )
+        assertFalse(
+            roomTargetBufferedLocally(
+                offsetTimeline, 30.0, playerPositionSeconds = 10.0, bufferedPlayerSeconds = 40.0,
+                seekableBehindPlayhead = true,
+            ),
+        )
     }
 
     @Test

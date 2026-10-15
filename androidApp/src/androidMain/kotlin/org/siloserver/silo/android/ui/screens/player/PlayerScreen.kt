@@ -391,6 +391,10 @@ fun PlayerScreen(
             subtitle = subtitle,
         )
     }
+    // This member's unanswered room seek: skips build on it and the timeline holds on it.
+    val roomPendingSeekSeconds by remember(watchParty) {
+        watchParty?.pendingSeekSeconds ?: MutableStateFlow<Double?>(null)
+    }.collectAsState()
     DisposableEffect(watchParty) {
         watchParty?.start()
         onDispose {
@@ -588,6 +592,11 @@ fun PlayerScreen(
         val party = watchParty ?: return@LaunchedEffect
         viewModel.roomQualityChanges.collect { party.binding.onQualityChanged() }
     }
+    // An in-place audio track switch may change the output path: rate support is measured again.
+    LaunchedEffect(watchParty) {
+        val party = watchParty ?: return@LaunchedEffect
+        viewModel.roomAudioTrackChanges.collect { party.binding.onAudioTrackChanged() }
+    }
 
     // Per-session playback control socket (admin remote control). Bound for the
     // lifetime of a sessionId; the loop reconnects on its own and never
@@ -651,6 +660,8 @@ fun PlayerScreen(
             playWhenReady = player.playWhenReady,
             isPlaying = player.isPlaying,
             playbackState = player.playbackState,
+            currentItemSeekable = player.isCurrentMediaItemSeekable,
+            playbackSpeed = player.playbackParameters.speed.toDouble(),
         )
     }
     // service. The video PlayerView binds its SurfaceView directly to this (NOT the
@@ -1524,7 +1535,7 @@ fun PlayerScreen(
 
     // Party only: sample the engine often enough that the room sees where
     // the player really is. The display ticker above is too coarse for the
-    // binding's 0.35 s drift decisions and stays as it is.
+    // binding's 0.1-0.4 s drift decisions and stays as it is.
     LaunchedEffect(mediaController, lifecycleOwner, watchParty) {
         val controller = mediaController ?: return@LaunchedEffect
         if (watchParty == null) return@LaunchedEffect
@@ -1925,6 +1936,8 @@ fun PlayerScreen(
                         inRoom = inRoom,
                         roomSuspended = roomSuspended,
                         roomStatus = roomStatus,
+                        roomPendingSeekSeconds = roomPendingSeekSeconds,
+                        roomSeekOrigin = { live -> watchParty?.relativeSeekOrigin(live) ?: live },
                         orientationLockSupported =
                             orientationLockSupported && activeTabletopPaneLayout == null,
                         alwaysShowControls = activeTabletopPaneLayout != null,

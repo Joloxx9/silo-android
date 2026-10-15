@@ -30,6 +30,16 @@ internal class MobileRoomPlayerPort(private val viewModel: PlayerViewModel) : Ro
     override fun isBuffered(sourceSeconds: Double): Boolean = viewModel.isRoomPositionBuffered(sourceSeconds)
 }
 
+/**
+ * The room seek a relative skip of [deltaSeconds] asks for from
+ * [originSeconds], kept at or after 0 and, when [durationSeconds] is known,
+ * at or before the end.
+ */
+internal fun roomSkipTarget(originSeconds: Double, deltaSeconds: Double, durationSeconds: Double): Double {
+    val target = (originSeconds + deltaSeconds).coerceAtLeast(0.0)
+    return if (durationSeconds > 0.0) target.coerceAtMost(durationSeconds) else target
+}
+
 internal fun roomPlayerState(playbackState: Int): RoomPlayerState = when (playbackState) {
     Player.STATE_BUFFERING -> RoomPlayerState.Buffering
     Player.STATE_READY -> RoomPlayerState.Ready
@@ -38,10 +48,15 @@ internal fun roomPlayerState(playbackState: Int): RoomPlayerState = when (playba
 }
 
 /**
- * Whether the mounted stream can reach [targetSourceSeconds] without loading
- * new media: the target maps natively onto the current plan's timeline (no
- * re-anchor) and lands between just behind the playhead and the buffered
- * position. False whenever that cannot be shown.
+ * Whether the mounted stream can reach [targetSourceSeconds] without
+ * rebuilding it: the target maps natively onto the current plan's timeline
+ * (no re-anchor) and lands no further ahead than the buffered position.
+ * Behind the playhead, anything within [backwardSlackSeconds] counts, and with
+ * [seekableBehindPlayhead] (the mounted item is seekable) so does any earlier
+ * point of the item, as on Apple and web. False whenever that cannot be shown.
+ * [mountedSeekableSourceRange] is the extent the mounted stream provably
+ * holds; pass the same range to the seek that follows, so a target judged
+ * reachable is not re-anchored.
  */
 internal fun roomTargetBufferedLocally(
     timeline: PlaybackTimeline?,
@@ -49,14 +64,18 @@ internal fun roomTargetBufferedLocally(
     playerPositionSeconds: Double,
     bufferedPlayerSeconds: Double,
     backwardSlackSeconds: Double = 1.0,
+    mountedSeekableSourceRange: ClosedRange<Double>? = null,
+    seekableBehindPlayhead: Boolean = false,
 ): Boolean {
     if (timeline == null) return false
     if (!targetSourceSeconds.isFinite() || targetSourceSeconds < 0.0) return false
     if (!playerPositionSeconds.isFinite() || !bufferedPlayerSeconds.isFinite()) return false
     if (bufferedPlayerSeconds < playerPositionSeconds) return false
-    val native = timeline.decideSeek(targetSourceSeconds) as? PlaybackSeekDecision.NativeSeek ?: return false
+    val native = timeline.decideSeek(targetSourceSeconds, mountedSeekableSourceRange) as? PlaybackSeekDecision.NativeSeek
+        ?: return false
     val target = native.targetPlayerPositionSeconds
-    return target >= playerPositionSeconds - backwardSlackSeconds && target <= bufferedPlayerSeconds
+    if (target > bufferedPlayerSeconds) return false
+    return target >= playerPositionSeconds - backwardSlackSeconds || (seekableBehindPlayhead && target >= 0.0)
 }
 
 /**

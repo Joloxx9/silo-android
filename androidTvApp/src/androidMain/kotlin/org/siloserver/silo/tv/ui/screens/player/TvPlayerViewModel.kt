@@ -989,9 +989,19 @@ class TvPlayerViewModel(
         val playbackState: Int,
         val suppressed: Boolean,
         val sampledAtMs: Long,
+        val playbackSpeed: Double?,
     )
 
     private var roomPlayerSample: TvRoomPlayerSample? = null
+
+    // When the latest transport mount was applied. A sample read before it
+    // describes the replaced item and must not be mapped through the new
+    // plan's timeline.
+    private var roomMountAppliedAtMs = Long.MIN_VALUE
+
+    // Counts applied transport mounts, so the room can tell new media from a
+    // native seek within the mounted item.
+    private var roomMountGeneration = 0L
     private val _roomObservation = MutableStateFlow(RoomPlayerObservation())
 
     /** What the player is actually doing, for the room binding. */
@@ -1387,6 +1397,15 @@ class TvPlayerViewModel(
     // ---- Remote session-control surface (driven by TvPlaybackRealtimeController) ----
     // Stop is screen-local (stopPlaybackAndExit) and the lifecycle `notice` is
     // read-only, so expose thin channels here for the control socket to drive.
+    private val _roomAudioTrackChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Emits when the viewer switched audio track within the mounted stream in
+     * a room, so the binding measures rate support again (a replan mounts new
+     * media, which already does).
+     */
+    val roomAudioTrackChanges: SharedFlow<Unit> = _roomAudioTrackChanges
+
     private val _remoteStopRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     /** Screen collects this and runs its teardown/exit. */
     val remoteStopRequests: SharedFlow<Unit> = _remoteStopRequests
@@ -2000,6 +2019,8 @@ class TvPlayerViewModel(
             // absent, which at worst costs an unnecessary reanchor.
             playerWindowIsSeekable = false
             playerWindowEndPlayerMs = -1L
+            roomMountAppliedAtMs = SystemClock.elapsedRealtime()
+            roomMountGeneration++
             pendingNativeSeekAfterMount?.let { targetSeconds ->
                 pendingNativeSeekAfterMount = null
                 // Re-evaluate against the plan that actually won the load;
@@ -3445,6 +3466,9 @@ class TvPlayerViewModel(
     private fun confirmDesiredAudio(desired: DesiredAudio) {
         if (desired.confirmed) return
         desiredAudio = desired.copy(confirmed = true)
+        // The new track is mounted and selected: only now can its output path
+        // (PCM or passthrough) be measured for rate support.
+        if (roomId != null) _roomAudioTrackChanges.tryEmit(Unit)
         _uiState.update {
             it.copy(desiredAudioOrdinal = desired.catalogOrdinal, desiredAudioConfirmed = true)
         }
@@ -4146,14 +4170,16 @@ class TvPlayerViewModel(
     }
 
     /**
-     * Whether [sourceSeconds] is reachable without new media: a plain native
-     * seek of the mounted item, between a second behind the playhead and the
-     * buffered position. Anything uncertain answers false.
+     * Whether [sourceSeconds] is reachable without rebuilding the stream: a
+     * plain native seek of the mounted item, no further ahead than the
+     * buffered position, and behind the playhead anywhere in a seekable
+     * window (otherwise within a second). Anything uncertain answers false.
      */
     fun isRoomPositionBuffered(sourceSeconds: Double): Boolean {
         if (roomId == null || !sourceSeconds.isFinite() || sourceSeconds < 0.0) return false
         val sample = roomPlayerSample ?: return false
         if (SystemClock.elapsedRealtime() - sample.sampledAtMs > ROOM_SAMPLE_MAX_AGE_MS) return false
+        if (sample.sampledAtMs <= roomMountAppliedAtMs) return false
         if (sample.playbackState != androidx.media3.common.Player.STATE_READY &&
             sample.playbackState != androidx.media3.common.Player.STATE_BUFFERING
         ) {
@@ -4172,6 +4198,7 @@ class TvPlayerViewModel(
             targetPlayerSeconds = targetPlayerSeconds,
             currentPlayerSeconds = sample.positionMs.coerceAtLeast(0L) / 1000.0,
             bufferedPlayerSeconds = sample.bufferedPositionMs.coerceAtLeast(0L) / 1000.0,
+            seekableBehindPlayhead = playerWindowIsSeekable,
         )
     }
 
@@ -4183,6 +4210,7 @@ class TvPlayerViewModel(
         isPlaying: Boolean,
         playbackState: Int,
         suppressed: Boolean,
+        playbackSpeed: Double? = null,
     ) {
         if (roomId == null) return
         roomPlayerSample = TvRoomPlayerSample(
@@ -4193,6 +4221,7 @@ class TvPlayerViewModel(
             playbackState = playbackState,
             suppressed = suppressed,
             sampledAtMs = SystemClock.elapsedRealtime(),
+            playbackSpeed = playbackSpeed?.takeIf { it.isFinite() && it > 0.0 },
         )
         publishRoomObservation()
     }
@@ -4289,7 +4318,9 @@ class TvPlayerViewModel(
         // Engine truth mapped to source time. While a new mount takes over, the
         // old item's position cannot be mapped through the new timeline, so
         // the last known value stands (and seekPending says it is not a decision).
-        val position = if (sample != null && hasMedia && !transportMountGate.suppressPositionReports) {
+        val sampled = sample != null && hasMedia && !transportMountGate.suppressPositionReports &&
+            sample.sampledAtMs > roomMountAppliedAtMs
+        val position = if (sample != null && sampled) {
             val raw = sample.positionMs.coerceAtLeast(0L) / 1000.0
             val mapped = state.playbackPlan?.timeline?.sourcePositionForPlayer(raw) ?: raw
             state.serverDuration.takeIf { it > 0.0 }?.let(mapped::coerceAtMost) ?: mapped
@@ -4306,6 +4337,9 @@ class TvPlayerViewModel(
             state = tvRoomPlayerState(sample?.playbackState, hasMedia),
             seekPending = roomSeekPending(state),
             suspended = roomHolds.isNotEmpty() || sample?.suppressed == true,
+            sampledAtMs = sample?.sampledAtMs?.takeIf { sampled },
+            playbackSpeed = sample?.playbackSpeed?.takeIf { sampled },
+            mountGeneration = roomMountGeneration,
         )
     }
 
@@ -5490,8 +5524,11 @@ class TvPlayerViewModel(
         }
     }
 
-    fun beginScrub() {
-        _uiState.update { it.copy(isScrubbing = true, scrubPreviewSec = it.position, showControls = true) }
+    /** Start scrubbing from [originSec], or the playback position when null. */
+    fun beginScrub(originSec: Double? = null) {
+        _uiState.update {
+            it.copy(isScrubbing = true, scrubPreviewSec = originSec ?: it.position, showControls = true)
+        }
     }
 
     fun updateScrubPreview(sec: Double) {

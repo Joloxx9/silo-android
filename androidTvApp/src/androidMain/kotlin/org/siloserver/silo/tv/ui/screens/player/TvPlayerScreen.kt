@@ -1823,6 +1823,8 @@ fun TvPlayerScreen(
             transformations = plan?.executableMedia3ClientTransformations().orEmpty(),
             runtimeCorrections = plan?.runtimeCorrections.orEmpty(),
             activeClaims = plan?.activeOriginalHttpClaims().orEmpty(),
+            // Watch Party playback stays on the saved address.
+            allowsLocalRoute = roomId.isNullOrBlank(),
         )
         state.sessionId?.let { sessionId ->
             PlaybackRuntimeCorrectionMetrics.reset()
@@ -1894,6 +1896,8 @@ fun TvPlayerScreen(
             transformations = plan?.executableMedia3ClientTransformations().orEmpty(),
             runtimeCorrections = plan?.runtimeCorrections.orEmpty(),
             activeClaims = plan?.activeOriginalHttpClaims().orEmpty(),
+            // Watch Party playback stays on the saved address.
+            allowsLocalRoute = roomId.isNullOrBlank(),
         )
         backend.refresh(mediaSpec)
         viewModel.onSubtitleCuesMounted(state.subtitleCueRevisions)

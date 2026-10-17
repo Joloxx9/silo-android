@@ -269,6 +269,7 @@ internal class TvSubtitleTransactionAdapter(
     ) -> Boolean = { _, _ -> true },
     private val onCommittedPlaybackFailure: suspend (String) -> Unit = {},
     private val onEmbeddedSubtitleFailure: (Int) -> Unit = {},
+    private val onHlsRenditionSubtitleFailure: (Int) -> Unit = {},
     /**
      * Whether the player currently exposes any text track to mount against.
      * The mount deadline must not run while the answer is "none": a freshly
@@ -2160,7 +2161,14 @@ internal class TvSubtitleTransactionAdapter(
         if (!ownedSelection && !ownedRestore) return
         val failedIdentity = (if (ownedSelection) pendingLocalSelection?.identity else pendingLocalRestore?.identity)
             as? SubtitleIdentity.Embedded
-        if (failedIdentity?.containerTrackId != null) {
+        if (failedIdentity?.isServerSelected == true) {
+            val requestSidecar = {
+                if (failedIdentity.hlsRendition != null) {
+                    onHlsRenditionSubtitleFailure(failedIdentity.serverIndex)
+                } else {
+                    onEmbeddedSubtitleFailure(failedIdentity.serverIndex)
+                }
+            }
             val selection = pendingLocalSelection.takeIf { ownedSelection }
             if (selection?.committedPlayback != null) {
                 // Regular replans wait for publication settlement. Restore the
@@ -2174,7 +2182,7 @@ internal class TvSubtitleTransactionAdapter(
                     ) {
                         failureMessage = "Embedded subtitles couldn't load. Retrying with a sidecar."
                         publish()
-                        onEmbeddedSubtitleFailure(failedIdentity.serverIndex)
+                        requestSidecar()
                     }
                 }
             } else {
@@ -2188,7 +2196,7 @@ internal class TvSubtitleTransactionAdapter(
                 invalidateLocalMount()
                 failureMessage = "Embedded subtitles couldn't load. Retrying with a sidecar."
                 publish()
-                onEmbeddedSubtitleFailure(failedIdentity.serverIndex)
+                requestSidecar()
             }
             return
         }
@@ -2546,8 +2554,8 @@ private fun TvStagedSubtitleCandidate.validationFailure(
         return validationFailure(returnedIdentity)
     }
     if (selectedSubtitleIdentity is SubtitleIdentity.Embedded &&
-        selectedSubtitleIdentity.containerTrackId != null &&
-        selectedSubtitleIndex == expectedSubtitleIndex && subtitleMode == PlaybackSubtitleModeV3.RENDER && !hasSidecar
+        selectedSubtitleIndex == expectedSubtitleIndex &&
+        selectedSubtitleIdentity.matchesServerSelectedPlan(subtitleMode, hasSidecar)
     ) return null
     return when (requested.identity) {
         is SubtitleIdentity.Embedded,
@@ -2627,8 +2635,9 @@ private fun TvStagedSubtitleCandidate.validationFailure(
             "The candidate did not burn in the requested subtitle."
         else -> null
     }
-    is SubtitleIdentity.Embedded -> if (identity.containerTrackId != null &&
-        selectedSubtitleIndex == identity.serverIndex && subtitleMode == PlaybackSubtitleModeV3.RENDER && !hasSidecar
+    is SubtitleIdentity.Embedded -> if (
+        selectedSubtitleIndex == identity.serverIndex &&
+        identity.matchesServerSelectedPlan(subtitleMode, hasSidecar)
     ) null else "The candidate omitted the exact embedded subtitle."
     is SubtitleIdentity.Downloaded,
     is SubtitleIdentity.LocalMedia3,

@@ -126,12 +126,27 @@ val androidTvModule = module {
             syncScheduler = get(),
         )
     }
+    single<org.siloserver.silo.repository.ArtworkLayout> {
+        val resources = androidContext().resources
+        val scope = this
+        org.siloserver.silo.tv.ui.theme.TvArtworkLayout(
+            displayDensity = { resources.displayMetrics.density },
+            // The saved card size, seeded from its local cache before the
+            // first reads (startup's Home warm-up runs before the UI loads it).
+            posterScale = {
+                val cards = scope.get<org.siloserver.silo.common.settings.CardPresentationStore>()
+                cards.seedFromCache()
+                cards.state.value.presentation.posterSize.posterScale
+            },
+        )
+    }
     single<org.siloserver.silo.repository.port.HomeCachePort> {
         val tokenManager: TokenManager = get()
         org.siloserver.silo.common.data.repository.RoomHomeCacheRepository(
             db = get(),
             snapshotProvider = { tokenManager.snapshotCurrentScope() },
             identityTransitions = get(),
+            artwork = get(),
         )
     }
     single<org.siloserver.silo.repository.port.CatalogCachePort> {
@@ -140,6 +155,7 @@ val androidTvModule = module {
             db = get(),
             snapshotProvider = { tokenManager.snapshotCurrentScope() },
             identityTransitions = get(),
+            artwork = get(),
         )
     }
     single<org.siloserver.silo.repository.port.DownloadDeletionPort> {

@@ -526,7 +526,7 @@ class TvSiloCastReceiver(
                 // access, is dropped instead of sent.
                 val stateWriter = launch {
                     for (published in session.stateUpdates) {
-                        session.sendState(published.state) {
+                        session.sendIf(SiloCastMessage.State(published.state)) {
                             synchronized(this@TvSiloCastReceiver) {
                                 session.isAuthorized && identityManager.activeIdentity?.generationId == published.generation
                             }
@@ -834,6 +834,7 @@ class TvSiloCastReceiver(
                     return@launch
                 }
                 var fullHandoff = false
+                var preparedGeneration: String? = null
                 val ready = identityManager.prepare(
                     offer = offer,
                     controllerDeviceId = controllerId,
@@ -850,6 +851,7 @@ class TvSiloCastReceiver(
                         titleNeedingConsent(session, offer)?.let { throw ReplaceConfirmationRequired(it) }
                         stopPlayerBeforeIdentitySwap()
                     },
+                    onPrepared = { preparedGeneration = it },
                 ) { challenge ->
                     if (!isCurrentHandoff(pending)) throw CancellationException("The handoff was superseded.")
                     session.send(SiloCastMessage.HandoffChallenge(challenge))
@@ -861,13 +863,13 @@ class TvSiloCastReceiver(
                     // fresh identity nobody can launch under is handed back; a
                     // reused one may still be playing.
                     if (!ready.reused) {
-                        identityManager.activeIdentity?.let { identityManager.end(it.generationId) }
+                        preparedGeneration?.let { identityManager.end(it) }
                         refreshAdvertisement()
                         reconcileAuthorization()
                     }
                     return@launch
                 }
-                completeHandoff(session, offer, controllerId, ready, fullHandoff) { grantedGeneration = it }
+                completeHandoff(session, checkNotNull(preparedGeneration), ready, fullHandoff) { grantedGeneration = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (refusal: ReplaceConfirmationRequired) {
@@ -911,47 +913,51 @@ class TvSiloCastReceiver(
      * must never play under this profile. Issues the resume token and tells
      * the others the TV now plays as someone else.
      */
+    /**
+     * Makes [session] the only controller ready for [generation] and issues
+     * its resume token. Caller holds the receiver monitor.
+     */
+    private fun grantReadiness(session: ControllerSession, generation: String): ResumeTokenGrant {
+        controllers.values.filter { it !== session }.forEach {
+            it.readyGeneration = null
+            it.ownIdentityProfileId = null
+        }
+        session.readyGeneration = generation
+        session.isAuthorized = true
+        val token = if (session.supports(SiloCastFeature.ResumeToken)) {
+            issuedIdentity?.takeIf { it.generation == generation }?.resumeToken
+                ?: TvSiloCastReceiverPolicy.makeResumeToken()
+        } else {
+            null
+        }
+        issuedIdentity = IssuedIdentity(generation = generation, connectionId = session.id, resumeToken = token)
+        return ResumeTokenGrant(token)
+    }
+
+    /** A granted readiness; [token] is null for a controller that can't use one. */
+    private data class ResumeTokenGrant(val token: String?)
+
     private suspend fun completeHandoff(
         session: ControllerSession,
-        offer: SiloCastHandoffOffer,
-        controllerId: String,
+        generation: String,
         ready: SiloCastHandoffReady,
         fullHandoff: Boolean,
         onGranted: (generation: String) -> Unit,
     ) {
-        // The identity was handed back in the moment after prepare() returned
-        // (idle end, expiry, server switch): fail the handoff so the phone
-        // hears it instead of waiting out its timeout.
-        val generation = identityManager.activeIdentity?.generationId
-            ?: error("The TV handed the profile back. Try again.")
-        val resumeToken = synchronized(this) {
-            // Readiness is granted only for the profile this offer prepared,
-            // never one another controller installed in the meantime.
-            check(identityManager.activeIdentity?.generationId == generation && identityManager.matches(offer, controllerId)) {
-                "The TV switched to another profile. Try again."
-            }
-            controllers.values.filter { it !== session }.forEach {
-                it.readyGeneration = null
-                it.ownIdentityProfileId = null
-            }
-            session.readyGeneration = generation
-            session.isAuthorized = true
-            val token = if (session.supports(SiloCastFeature.ResumeToken)) {
-                issuedIdentity?.takeIf { it.generation == generation }?.resumeToken
-                    ?: TvSiloCastReceiverPolicy.makeResumeToken()
-            } else {
-                null
-            }
-            issuedIdentity = IssuedIdentity(generation = generation, connectionId = session.id, resumeToken = token)
-            token
-        }
+        // Readiness is granted only while the generation this offer prepared
+        // is still active, under the identity manager's lock: if it was handed
+        // back (idle end, expiry, server switch) or replaced in the moment
+        // after prepare() returned, the handoff fails and the phone hears it.
+        val resumeToken = identityManager.whileActive(generation) {
+            synchronized(this@TvSiloCastReceiver) { grantReadiness(session, generation) }
+        } ?: error("The TV switched to another profile. Try again.")
         onGranted(generation)
         DiagnosticsCastLogger.event("TV cast handoff authorized")
         refreshAdvertisement()
         // A cross-server identity changes the effective server under the
         // other controllers.
         reconcileAuthorization()
-        session.send(SiloCastMessage.HandoffReady(ready.copy(resumeToken = resumeToken)))
+        session.send(SiloCastMessage.HandoffReady(ready.copy(resumeToken = resumeToken.token)))
         session.offerState(snapshotState())
         // Replaces the old ready-without-launch timeout: with nothing playing,
         // the profile goes back after the idle limit. A player cancels this
@@ -1205,17 +1211,24 @@ class TvSiloCastReceiver(
         )
         // Notices are sent after teardown and off this coroutine: a controller
         // that stopped reading must not hold up the stop or the hand-back.
+        // They go out only if this expiry ended its own profile, and each is
+        // dropped if a new handoff completed before its write.
         val notified = authorizedControllers()
         activePlayer?.takeIf { it.identityGeneration == generationId }?.let { player ->
             withContext(Dispatchers.Main.immediate) {
                 player.adapter.handle(SiloCastControlCommand(name = SiloCastControlCommand.Stop))
             }
         }
-        if (identityManager.end(generationId)) {
-            refreshAdvertisement()
-            reconcileAuthorization()
+        // A handoff that replaced the profile while playback stopped owns the
+        // TV now; nobody hears about the old profile.
+        if (!identityManager.end(generationId)) return
+        refreshAdvertisement()
+        reconcileAuthorization()
+        notified.forEach { session ->
+            scope?.launch {
+                runCatching { session.sendIf(error) { identityManager.activeIdentity == null } }
+            }
         }
-        notified.forEach { session -> scope?.launch { runCatching { session.send(error) } } }
     }
 
     /**
@@ -1729,10 +1742,10 @@ class TvSiloCastReceiver(
             stateUpdates.trySend(state)
         }
 
-        /** Writes [state] only if [admit] still holds once this connection's write lock is taken. */
-        suspend fun sendState(state: SiloCastPlaybackState, admit: () -> Boolean) {
+        /** Writes [message] only if [admit] still holds once this connection's write lock is taken. */
+        suspend fun sendIf(message: SiloCastMessage, admit: () -> Boolean) {
             val frame = SiloCastFrame.encode(
-                json.encodeToString(SiloCastMessage.serializer(), SiloCastMessage.State(state)).encodeToByteArray(),
+                json.encodeToString(SiloCastMessage.serializer(), message).encodeToByteArray(),
             )
             writeMutex.withLock {
                 if (!admit()) return@withLock

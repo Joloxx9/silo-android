@@ -55,7 +55,10 @@ class MissingSeasons(
     suspend fun requests(tmdbId: Int?, missing: MissingEpisodes): MissingSeasonRequests {
         if (missing == MissingEpisodes.NONE || tmdbId == null || tmdbId <= 0) return MissingSeasonRequests()
         val status = (requests.status() as? ApiResult.Success)?.data
-        if (status?.isAvailable != true || !status.seriesServerConnected) return MissingSeasonRequests()
+        // A download server that cannot fetch single seasons would add the whole series again.
+        if (status?.isAvailable != true || !status.seriesServerConnected || !status.missingSeasonsRequestable) {
+            return MissingSeasonRequests()
+        }
         val media = (requests.detail(RequestMediaType.Series, tmdbId) as? ApiResult.Success)?.data
             ?: return MissingSeasonRequests()
         return MissingSeasonRequests(

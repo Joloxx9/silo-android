@@ -261,6 +261,11 @@ data class RequestsFeatureStatus(
     @SerialName("follow_supported") val followSupported: Boolean = false,
     /** An enabled download server takes series requests, so a missing season has somewhere to go. */
     @SerialName("series_server_connected") val seriesServerConnected: Boolean = false,
+    /**
+     * A series already in the library can be requested for the seasons it lacks: every
+     * download server the series go to fetches single seasons. Absent (false) on older servers.
+     */
+    @SerialName("missing_seasons_requestable") val missingSeasonsRequestable: Boolean = false,
 ) {
     /** The feature is on and this profile may use it; a blocked account sees `allowed: false`. */
     val isAvailable: Boolean

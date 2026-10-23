@@ -57,6 +57,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.Player
@@ -228,7 +229,8 @@ private fun SubtitleIdentity.requiresMountedMobileSelection(): Boolean =
  * is [PlayerOverlay].
  *
  * @param contentId The content ID to play (passed via navigation argument)
- * @param initialFileId Optional explicit file selection from the detail screen
+ * @param initialFileId Optional file from the detail screen
+ * @param initialVersionChosen The viewer picked [initialFileId]'s version, so the start pins it
  * @param initialQuality Optional explicit playback-quality ceiling from a deep link
  * @param initialAudioTrackIndex Optional explicit audio selection from the detail screen
  * @param initialSubtitleTrackIndex Optional explicit subtitle selection from the detail screen
@@ -241,6 +243,7 @@ fun PlayerScreen(
     contentId: String,
     libraryId: Int? = null,
     initialFileId: Int? = null,
+    initialVersionChosen: Boolean = false,
     initialQuality: String? = null,
     initialAudioTrackIndex: Int? = null,
     initialSubtitleTrackIndex: Int? = null,
@@ -266,6 +269,29 @@ fun PlayerScreen(
     val sessionState by viewModel.sessionState.collectAsState()
     val pictureInPictureEnabled by playerSettingsStore.pictureInPictureEnabledFlow.collectAsState(initial = true)
     val isInPictureInPictureMode by pictureInPictureCoordinator.isInPictureInPictureMode.collectAsState()
+    // Picture in picture and the background show no pills, so a buffering
+    // pill waits there with its timer frozen, as behind a higher-priority pill.
+    DisposableEffect(lifecycleOwner, isInPictureInPictureMode) {
+        fun report() = viewModel.onPlayerViewHiddenChanged(
+            isInPictureInPictureMode ||
+                !lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED),
+        )
+        val observer = LifecycleEventObserver { _, _ -> report() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // The activity's stop, not this destination's: closing the player stops
+    // the destination too, and that exit sends the real plan summary itself.
+    DisposableEffect(activity) {
+        val activityLifecycle = (activity as? LifecycleOwner)?.lifecycle
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && activity?.isChangingConfigurations != true) {
+                viewModel.onAppLeftForeground()
+            }
+        }
+        activityLifecycle?.addObserver(observer)
+        onDispose { activityLifecycle?.removeObserver(observer) }
+    }
     val backendFactory: VideoPlaybackBackendFactory = koinInject()
     val audioCapabilityManager: AudioCapabilityManager = koinInject()
     val capabilityDetector: PlaybackCapabilityDetector = koinInject()
@@ -855,7 +881,15 @@ fun PlayerScreen(
     }
 
     // Load content on first composition
-    LaunchedEffect(contentId, initialFileId, initialQuality, initialAudioTrackIndex, initialSubtitleTrackIndex, resumePositionOverride) {
+    LaunchedEffect(
+        contentId,
+        initialFileId,
+        initialVersionChosen,
+        initialQuality,
+        initialAudioTrackIndex,
+        initialSubtitleTrackIndex,
+        resumePositionOverride,
+    ) {
         // A party starts from the room's playback context (above), never from
         // the route, so nothing plays solo first.
         if (inRoom) return@LaunchedEffect
@@ -865,6 +899,7 @@ fun PlayerScreen(
             libraryId = libraryId,
             contentId = contentId,
             preferredFileId = initialFileId,
+            versionChosen = initialVersionChosen,
             preferredQuality = initialQuality,
             initialAudioTrackIndex = initialAudioTrackIndex,
             initialSubtitleTrackIndex = initialSubtitleTrackIndex,
@@ -1108,6 +1143,8 @@ fun PlayerScreen(
             allowsLocalRoute = !inRoom,
         )
         viewModel.onSubtitleMediaMountChanging()
+        // The same plan, remounted: its coming wait is a reload, not a stall.
+        viewModel.bufferingQualityAdapter.markReload()
         backend.refresh(mediaSpec)
         viewModel.onSubtitleMediaMountApplied(MobileSubtitleMount(uiState.mediaMountGeneration, uiState.subtitleRefreshNonce))
         viewModel.onSubtitleCuesMounted(uiState.subtitleCueRevisions)
@@ -1192,6 +1229,13 @@ fun PlayerScreen(
             player.addAnalyticsListener(listener)
             onDispose { player.removeAnalyticsListener(listener) }
         }
+    }
+
+    // The buffering-quality controller reads the player that renders the plan:
+    // its states for stalls, and its loads for whether data is still arriving.
+    DisposableEffect(sessionPlayer) {
+        val detach = (sessionPlayer as? ExoPlayer)?.let(viewModel.bufferingQualityAdapter::attach)
+        onDispose { detach?.invoke() }
     }
 
     // Player event listener to feed state back to ViewModel + track video size for PiP
@@ -1420,6 +1464,10 @@ fun PlayerScreen(
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
                 val decoderCounters = (sessionPlayer as? androidx.media3.exoplayer.ExoPlayer)?.videoDecoderCounters
+                viewModel.bufferingQualityAdapter.sampleBuffer(
+                    nowMs = SystemClock.elapsedRealtime(),
+                    bufferedPositionMs = controller.bufferedPosition.coerceAtLeast(0L),
+                )
                 val reason = startupStallDetector.sample(
                     sessionKey = sessionKey,
                     nowMs = SystemClock.elapsedRealtime(),
@@ -1433,7 +1481,24 @@ fun PlayerScreen(
                     decoderSkippedOutputBufferCount = decoderCounters?.skippedOutputBufferCount ?: 0,
                     decoderDroppedBufferCount = decoderCounters?.droppedBufferCount ?: 0,
                 )
-                if (reason != null) {
+                // A slow plan that is still receiving data belongs to the
+                // buffering-quality controller: no same-plan reopen and no
+                // failure replan, and this loop keeps sampling.
+                if (reason != null &&
+                    viewModel.bufferingQualityAdapter.ownsStartupStall(
+                        reason = reason,
+                        nowMs = SystemClock.elapsedRealtime(),
+                        controllerEnabled = viewModel.bufferingQualityEnabled,
+                    )
+                ) {
+                    Log.i(
+                        TAG,
+                        "startup_stall owned_by=${if (viewModel.bufferingQualityAdapter.transportTroubleActive) "outage" else "buffering_quality"} " +
+                            "classification=${reason.classification} " +
+                            "stalled_for_ms=${reason.stalledForMs}",
+                    )
+                    startupStallDetector.onStallHandedOff(SystemClock.elapsedRealtime())
+                } else if (reason != null) {
                     Log.i(TAG, "Startup stall fallback: $reason")
                     viewModel.onUnsupportedPlayback(reason, uiState.mediaMountGeneration)
                     return@repeatOnLifecycle

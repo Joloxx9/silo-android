@@ -1,3 +1,5 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package org.siloserver.silo.common.di
 
 import org.siloserver.silo.common.network.ServerReachabilityMonitor
@@ -37,13 +39,26 @@ import org.siloserver.silo.network.api.SettingsApi
 import org.siloserver.silo.repository.LibraryPlaybackPrefsRepository
 import org.siloserver.silo.repository.ProfileRepository
 import org.siloserver.silo.repository.SettingsRepository
+import org.siloserver.silo.common.player.probe.BandwidthProbeScheduler
+import org.siloserver.silo.common.player.probe.PlaybackBandwidthEstimates
+import org.siloserver.silo.common.player.probe.PlaybackV2BandwidthProbeServer
+import org.siloserver.silo.common.player.probe.PlayerMediaActivity
+import org.siloserver.silo.common.player.probe.profileSwitches
+import org.siloserver.silo.model.server.ServerEntry
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
+
+/** The entry's id while it is signed in with a profile: what the bandwidth probe measures. */
+private fun ServerEntry?.signedInServerId(): String? = this?.takeIf { !it.profileId.isNullOrBlank() }?.id
 
 /**
  * Phase 0 player infrastructure DI module.
@@ -62,8 +77,76 @@ val playerInfraModule = module {
         org.siloserver.silo.common.player.AndroidPlaybackJournalStore(androidContext())
     }
     single { org.siloserver.silo.network.apiv2.PlaybackV2Api(get(), get()) }
+    // The buffering-quality connection state and learned-limit reset Settings shows.
+    single { org.siloserver.silo.repository.PlaybackConnectionRepository(get(), get()) }
+    // The bandwidth probe: one schedule per process, which each app's
+    // Application starts on the process lifecycle. Playback starts read its
+    // estimate through PlaybackBandwidthEstimates.
     single {
-        org.siloserver.silo.repository.SequencedPlayback(get(), get(), get(), get()) {
+        val registry = get<ServerRegistry>()
+        // One coroutine at a time: the scheduler's state is confined to it.
+        val probeScope = CoroutineScope(
+            SupervisorJob() + Dispatchers.Default.limitedParallelism(1) +
+                CoroutineExceptionHandler { _, failure ->
+                    // Class name only: the message can carry the server's address.
+                    android.util.Log.w("BandwidthProbe", "bandwidth probe failed: ${failure::class.simpleName}")
+                },
+        )
+        BandwidthProbeScheduler(
+            server = PlaybackV2BandwidthProbeServer(get(), get()),
+            network = get(),
+            mediaActive = PlayerMediaActivity(
+                holder = get(),
+                scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+            ).active,
+            activeServer = registry.activeEntry
+                .map { it.signedInServerId() }
+                .stateIn(probeScope, SharingStarted.Eagerly, registry.activeEntry.value.signedInServerId()),
+            scope = probeScope,
+            profileSwitches = registry.activeEntry
+                .map { it?.id to it?.profileId?.takeIf(String::isNotBlank) }
+                .distinctUntilChanged()
+                .profileSwitches(),
+            localRoute = org.siloserver.silo.network.localroute.LocalRoutes.state.active,
+        )
+    }
+    single<PlaybackBandwidthEstimates> { get<BandwidthProbeScheduler>() }
+    // The video player and its session manager, the same on phone and TV: the
+    // subtitle manager each app registers carries the form factor's policy.
+    single {
+        org.siloserver.silo.common.player.SiloPlayerFactory(
+            context = androidContext(),
+            tokenManager = get(),
+            subtitleManager = get(),
+            httpDataSourceFactory = get(PLAYER_HTTP_DATA_SOURCE_FACTORY_QUALIFIER),
+            mediaAuthSession = get(),
+            bandwidthMeter = get(),
+            delayProcessor = get(),
+            subtitleOffsetHolder = get(),
+            libassBridge = get(),
+            playbackAnalytics = get(),
+            throughputMeter = get(),
+        )
+    }
+    // Video starts send the bandwidth probe's estimate, and plan summaries the
+    // video's throughput; the audiobook managers the apps register do neither.
+    single {
+        val playerSettings = get<PlayerSettingsStore>()
+        org.siloserver.silo.common.player.PlaybackSessionManager(
+            get(), get(), get(),
+            bandwidthEstimates = get(),
+            throughputKbps = get<org.siloserver.silo.common.player.PlaybackThroughputMeter>()::takeKbps,
+            playingPlanThroughputKbps = get<org.siloserver.silo.common.player.PlaybackThroughputMeter>()::peekKbps,
+            // The profile's mode as last stored on this device, which the
+            // store answers locally, so no start goes out before it is known.
+            bufferingQualityMode = { playerSettings.bufferingQualityModeFlow.first() },
+        )
+    }
+    single {
+        org.siloserver.silo.repository.SequencedPlayback(
+            get(), get(), get(), get(),
+            log = { android.util.Log.i("SequencedPlayback", it) },
+        ) {
             java.util.UUID.randomUUID().toString()
         }
     }
@@ -103,6 +186,7 @@ val playerInfraModule = module {
         SettingsContractRevision(
             fetchCapabilities = { settingsApi.getContractCapabilities() },
             getServerUrl = { get<TokenManager>().getServerUrl() },
+            fetchManifestKeys = { settingsApi.getContractKeys() },
         )
     }
 

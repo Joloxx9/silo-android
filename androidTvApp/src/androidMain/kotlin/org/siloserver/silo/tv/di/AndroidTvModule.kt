@@ -27,7 +27,6 @@ import org.siloserver.silo.common.player.PlaybackCapabilityDetector
 import org.siloserver.silo.common.player.backend.VideoPlaybackBackendFactory
 import org.siloserver.silo.tv.ui.screens.settings.TvSettingsViewModel
 import org.siloserver.silo.tv.ui.screens.settings.diagnostics.TvDiagnosticsViewModel
-import org.siloserver.silo.common.player.SiloPlayerFactory
 import org.siloserver.silo.common.player.PlaybackSessionManager
 import org.siloserver.silo.common.player.audio.PassthroughSuppressionScope
 import org.siloserver.silo.common.di.AUDIOBOOK_PLAYBACK_SESSION_MANAGER_QUALIFIER
@@ -80,7 +79,8 @@ import org.koin.dsl.module
  * TV-specific Koin module.
  *
  * Provides the TV flavor of player infrastructure (currently a duplicate of the
- * phone module — see the TODO on [SiloPlayerFactory]) and the TV ViewModels.
+ * phone module — see the TODO on
+ * [SiloPlayerFactory][org.siloserver.silo.common.player.SiloPlayerFactory]) and the TV ViewModels.
  * The shared [org.siloserver.silo.di.sharedModules] is added alongside this one in
  * [org.siloserver.silo.tv.SiloTvApplication].
  */
@@ -216,21 +216,6 @@ val androidTvModule = module {
     }
     single { AudioCapabilityManager(androidContext()) }
     single { PlaybackCapabilityDetector(androidContext(), get(), get(), get()) }
-    single {
-        SiloPlayerFactory(
-            context = androidContext(),
-            tokenManager = get(),
-            subtitleManager = get(),
-            httpDataSourceFactory = get(org.siloserver.silo.common.di.PLAYER_HTTP_DATA_SOURCE_FACTORY_QUALIFIER),
-            mediaAuthSession = get(),
-            bandwidthMeter = get(),
-            delayProcessor = get(),
-            subtitleOffsetHolder = get(),
-            libassBridge = get(),
-            playbackAnalytics = get(),
-        )
-    }
-    single { PlaybackSessionManager(get(), get(), get()) }
     single(AUDIOBOOK_PLAYBACK_SESSION_MANAGER_QUALIFIER) {
         PlaybackSessionManager(
             playbackRepository = get(),
@@ -633,6 +618,10 @@ val androidTvModule = module {
             launchArgs = params.get<TvPlayerLaunchArgs>(),
             shuffleFeatureStore = get(),
             sectionRepository = get(),
+            // The process-wide monitor (PlayerModule): the buffering-quality
+            // adapter treats a wait while offline as an outage.
+            networkEvidence = get(),
+            throughputMeter = get(),
         )
     }
 
@@ -677,6 +666,8 @@ val androidTvModule = module {
             audiobookSettingsStore = get(),
             profileLaunchPreferences = get(),
             watchNextSeeder = get(),
+            playbackConnection = get(),
+            bandwidthProbe = get(),
         )
     }
     viewModel { TvDiagnosticsViewModel(get()) }

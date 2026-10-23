@@ -30,7 +30,6 @@ import org.siloserver.silo.common.pairing.TlsPskPairingClientTransport
 import org.siloserver.silo.common.player.AudioCapabilityManager
 import org.siloserver.silo.common.player.AudioTrackManager
 import org.siloserver.silo.common.player.AndroidSubtitlePresentation
-import org.siloserver.silo.common.player.SiloPlayerFactory
 import org.siloserver.silo.common.player.PlaybackCapabilityDetector
 import org.siloserver.silo.common.player.PlaybackSessionManager
 import org.siloserver.silo.common.player.audio.PassthroughSuppressionScope
@@ -356,21 +355,6 @@ val androidModule = module {
     }
     single { AudioCapabilityManager(androidContext()) }
     single { PlaybackCapabilityDetector(androidContext(), get(), get(), get()) }
-    single {
-        SiloPlayerFactory(
-            context = androidContext(),
-            tokenManager = get(),
-            subtitleManager = get(),
-            httpDataSourceFactory = get(org.siloserver.silo.common.di.PLAYER_HTTP_DATA_SOURCE_FACTORY_QUALIFIER),
-            mediaAuthSession = get(),
-            bandwidthMeter = get(),
-            delayProcessor = get(),
-            subtitleOffsetHolder = get(),
-            libassBridge = get(),
-            playbackAnalytics = get(),
-        )
-    }
-    single { PlaybackSessionManager(get(), get(), get()) }
     single(AUDIOBOOK_PLAYBACK_SESSION_MANAGER_QUALIFIER) {
         PlaybackSessionManager(
             playbackRepository = get(),
@@ -505,6 +489,7 @@ val androidModule = module {
             activeProfileStore = get(),
             shuffleFeatureStore = get(),
             networkEvidenceProvider = get(),
+            throughputMeter = get(),
         )
     }
     viewModel { HomeViewModel(get(), get(), get(), get(), getOrNull(), get(), get(), catalogLanguage = get()) }
@@ -625,7 +610,7 @@ val androidModule = module {
         }
     }
     single { org.siloserver.silo.android.auth.ActiveProfileReset(get(), get(), get(), get(), get(), get(), get(), get(), get()) }
-    viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
+    viewModel { SettingsViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { DiagnosticsViewModel(get()) }
     viewModel { DownloadsViewModel(get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get(), get()) }
     viewModel { org.siloserver.silo.android.ui.screens.pairing.CompanionPairingViewModel(get(), get(), get()) }

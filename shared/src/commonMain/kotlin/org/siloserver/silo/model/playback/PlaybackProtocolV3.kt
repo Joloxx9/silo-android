@@ -40,6 +40,33 @@ const val HLS_SUBTITLE_RENDITIONS_V1_FEATURE = "hls_subtitle_renditions_v1"
 const val PLAN_ACTIVE_QUALITY_V1_FEATURE = "plan_active_quality_v1"
 
 /**
+ * The server keeps learned bandwidth limits and accepts
+ * `bandwidth_estimate_source` and `learned_limit` on start and replan. The
+ * server advertises it in the `/api/v2` capability `features`; only then does
+ * the client echo it in `client_features` and send those fields, because the
+ * server rejects unknown fields. Spec: the server repo's
+ * `docs/design/2026-10-17-buffering-quality.md`, *Wire contract*.
+ */
+const val BUFFERING_QUALITY_V1_FEATURE = "buffering_quality_v1"
+
+/** The server accepts the `plan_summary` route event. */
+const val PLAYBACK_PLAN_SUMMARY_V1_FEATURE = "playback_plan_summary_v1"
+
+/** The server serves a bandwidth probe on the media path and takes probe results. */
+const val CONNECTION_SPEED_V1_FEATURE = "connection_speed_v1"
+
+/** `bandwidth_estimate_source` values. Valid only alongside `bandwidth_estimate_kbps`. */
+const val BANDWIDTH_ESTIMATE_SOURCE_PROBE = "probe"
+const val BANDWIDTH_ESTIMATE_SOURCE_OBSERVED_REBUFFER = "observed_rebuffer"
+
+/** `learned_limit` values. Absent applies the stored limit. */
+const val LEARNED_LIMIT_IGNORE = "ignore"
+const val LEARNED_LIMIT_CLEAR = "clear"
+
+/** The degradation warning Auto returns when nothing lower exists. */
+const val QUALITY_REDUCTION_UNAVAILABLE_WARNING = "quality_reduction_unavailable"
+
+/**
  * Failure classifications for a server subtitle decision the player selects
  * from its own media and could not mount. Either one asks `failure_recovery`
  * for the sidecar plan; neither may tear down healthy video.
@@ -280,6 +307,16 @@ data class PlaybackPlanV3(
     @SerialName("effective_media_file_id") val effectiveMediaFileId: Int? = null,
     val source: PlaybackSourceDescriptorV3 = PlaybackSourceDescriptorV3(),
     @SerialName("subtitle_fidelity_policy") val subtitleFidelityPolicy: String? = null,
+    /** Present only when a learned limit lowered this plan. */
+    @SerialName("bandwidth_limit") val bandwidthLimit: PlaybackBandwidthLimitV3? = null,
+)
+
+/** A learned bandwidth limit that lowered Auto for this plan. */
+@Serializable
+data class PlaybackBandwidthLimitV3(
+    val kbps: Int,
+    val source: String = BANDWIDTH_ESTIMATE_SOURCE_OBSERVED_REBUFFER,
+    @SerialName("expires_at") val expiresAt: String? = null,
 )
 
 /** One selectable rung of [PlaybackPlanV3.availableQualities]. */
@@ -500,15 +537,29 @@ data class PlaybackStartRequestV3(
      * Always false, here and on replans. The server ignores it; older servers
      * require it on `/api/v2` and drop Auto to their metered limit when it is
      * true. The phone applies its own cellular quality pair instead.
-     *
-     * No `bandwidth_estimate_kbps` is sent either, so Auto plays the source
-     * whenever the device can. Media3's meter times loads that stall on a
-     * full buffer or wait on a live transcode, so its figure can understate
-     * the link and make Auto convert the next title; a measured estimate waits
-     * for the server's bandwidth probe.
      */
     val metered: Boolean = false,
     @SerialName("bandwidth_cap_kbps") val bandwidthCapKbps: Int? = null,
+    /**
+     * The highest current reading for this server and network, a speed test
+     * or a playback sample: a hint Auto uses to rule out a source the link
+     * clearly cannot carry. Absent without one, and on metered or cellular
+     * networks. Media3's bandwidth meter is never sent: it times
+     * loads that stall on a full buffer or wait on a live transcode, so its
+     * figure can understate the link and make Auto convert.
+     */
+    @SerialName("bandwidth_estimate_kbps") val bandwidthEstimateKbps: Int? = null,
+    /**
+     * [BANDWIDTH_ESTIMATE_SOURCE_PROBE] alongside [bandwidthEstimateKbps];
+     * needs [BUFFERING_QUALITY_V1_FEATURE].
+     */
+    @SerialName("bandwidth_estimate_source") val bandwidthEstimateSource: String? = null,
+    /**
+     * `ignore` in `never` mode, so a limit learned by another profile on this
+     * device does not reach this one, and on every Cast request. Sent only to
+     * a server advertising [BUFFERING_QUALITY_V1_FEATURE].
+     */
+    @SerialName("learned_limit") val learnedLimit: String? = null,
     @SerialName("client_capabilities") val capabilities: ClientCodecCapabilities,
     @SerialName("client_playback_context") val clientPlaybackContext: ClientPlaybackContext,
     /**
@@ -549,9 +600,27 @@ data class PlaybackReplanRequestV3(
     @SerialName("attempt_count") val attemptCount: Int,
     @SerialName("quality_preference") val qualityPreference: String = "auto",
     @SerialName("position_seconds") val positionSeconds: Double,
-    /** Always false, with no estimate; see [PlaybackStartRequestV3.metered]. */
+    /** Always false; see [PlaybackStartRequestV3.metered]. */
     val metered: Boolean = false,
     @SerialName("bandwidth_cap_kbps") val bandwidthCapKbps: Int? = null,
+    /**
+     * The buffering-quality step-down estimate: on the `quality_change` replan
+     * that lowers Auto after repeated rebuffering, then without a source on
+     * later Auto replans the client sends for its own reasons. Media3's
+     * bandwidth meter is never sent.
+     */
+    @SerialName("bandwidth_estimate_kbps") val bandwidthEstimateKbps: Int? = null,
+    /** Valid only alongside [bandwidthEstimateKbps]; needs [BUFFERING_QUALITY_V1_FEATURE]. */
+    @SerialName("bandwidth_estimate_source") val bandwidthEstimateSource: String? = null,
+    /**
+     * The playing plan's throughput so far, measured as `plan_summary`'s
+     * `throughput_kbps`. Valid only on a lowering, with
+     * [BANDWIDTH_ESTIMATE_SOURCE_OBSERVED_REBUFFER]; the server plans with the
+     * lower of this and [bandwidthEstimateKbps]. Needs [BUFFERING_QUALITY_V1_FEATURE].
+     */
+    @SerialName("observed_throughput_kbps") val observedThroughputKbps: Int? = null,
+    /** `ignore` or `clear`; needs [BUFFERING_QUALITY_V1_FEATURE]. */
+    @SerialName("learned_limit") val learnedLimit: String? = null,
     @SerialName("selected_tracks") val selectedTracks: SelectedPlaybackTracksV3,
     /**
      * Absent for intent operations ([INTENT_V3_OPERATIONS]), which describe a

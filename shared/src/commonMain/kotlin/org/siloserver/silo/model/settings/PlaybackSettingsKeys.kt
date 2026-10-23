@@ -36,6 +36,22 @@ object PlaybackSettingsKeys {
      * order as [AutoSkipIntro], which it supersedes.
      */
     const val IntroSkipMode = "playback.intro_skip_mode"
+
+    /**
+     * `never` | `ask` | `always` — see
+     * [org.siloserver.silo.domain.player.BufferingQualityMode] and the server's
+     * `docs/design/2026-10-17-buffering-quality.md`. Same scopes as
+     * [IntroSkipMode]. An older server neither stores nor answers it; a
+     * client tells by the key's presence in the server's manifest
+     * ([ManifestDetectedKeys]), never by its revision.
+     */
+    const val BufferingQualityMode = "playback.buffering_quality_mode"
+
+    /**
+     * Keys some supported servers lack, detected by their presence in the
+     * server's settings manifest rather than by its revision number.
+     */
+    val ManifestDetectedKeys: Set<String> = setOf(BufferingQualityMode)
     const val AutoSkipCredits = "playback.auto_skip_credits"
     const val AutoPlayNext = "playback.auto_play_next"
     // Renamed at the settings cutover: every other key carries a domain prefix
@@ -183,6 +199,7 @@ object PlaybackSettingsKeys {
         AudioLanguage,
         AutoSkipIntro,
         IntroSkipMode,
+        BufferingQualityMode,
         AutoSkipCredits,
         AutoPlayNext,
         SubtitleAppearance,
@@ -224,6 +241,7 @@ object PlaybackSettingsKeys {
         AudioLanguage,
         AutoSkipIntro,
         IntroSkipMode,
+        BufferingQualityMode,
         AutoSkipCredits,
         AutoPlayNext,
         NextUpPromptSeconds,

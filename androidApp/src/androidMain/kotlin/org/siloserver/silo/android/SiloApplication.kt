@@ -124,6 +124,27 @@ class SiloApplication : Application(), Configuration.Provider, SingletonImageLoa
         }.onFailure {
             android.util.Log.w("SiloApplication", "Local route starter init failed", it)
         }
+        // Measure the connection in the background after sign-in and each
+        // return to the foreground, for Auto quality and Settings. Guarded —
+        // without it playback sends no estimate.
+        runCatching {
+            koinApp.koin.get<org.siloserver.silo.common.player.probe.BandwidthProbeScheduler>()
+                .start(androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle, phoneOrTablet = true)
+        }.onFailure {
+            android.util.Log.w("SiloApplication", "Bandwidth probe scheduler init failed: ${it::class.simpleName}")
+        }
+        // Send the playback telemetry an earlier launch left unsent, such as
+        // the summary of a plan still playing when the app was backgrounded
+        // and its process died. Off the main thread. Guarded — never
+        // load-bearing for cold start.
+        runCatching {
+            org.siloserver.silo.common.player.RouteEventReplayStarter(
+                registry = koinApp.koin.get(),
+                playback = koinApp.koin.get(),
+            ).start()
+        }.onFailure {
+            android.util.Log.w("SiloApplication", "Route event replay starter init failed: ${it::class.simpleName}")
+        }
         // Drain the user-state outbox (Track B) on launch + when connectivity
         // returns. Guarded — never load-bearing for cold start.
         runCatching {

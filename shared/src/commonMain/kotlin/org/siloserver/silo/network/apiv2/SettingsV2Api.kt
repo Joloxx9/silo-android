@@ -71,6 +71,13 @@ class SettingsV2Api(
             client.get("/api/v2/settings/contract/capabilities") { authScope(owner); requireSiloAuth() }
         }) { capabilities, _ -> capabilities }
 
+    /** The keys the server's settings manifest defines: `definitions[].key` of `GET /settings/contract`. */
+    suspend fun contractKeys(): ApiResult<Set<String>> =
+        read("/api/v2/settings/contract") { manifest, _ ->
+            requireNotNull(manifest["definitions"]).jsonArray
+                .mapTo(mutableSetOf()) { it.jsonObject.getValue("key").jsonPrimitive.content }
+        }
+
     // ---- canonical scope writes ----
 
     suspend fun put(

@@ -29,6 +29,7 @@ import org.siloserver.silo.common.profiles.ProfileLaunchBehavior
 import org.siloserver.silo.common.profiles.ProfileLaunchPreferences
 import org.siloserver.silo.common.settings.TitleArtStore
 import org.siloserver.silo.common.settings.UseProfileSettingsCopy
+import org.siloserver.silo.common.settings.shownIn
 import org.siloserver.silo.model.feature.MetadataAiFeatureStore
 import org.siloserver.silo.model.metadata.MetadataAiOnView
 import org.siloserver.silo.model.settings.SeekMedia
@@ -126,7 +127,12 @@ fun SettingsInterfaceScreen(viewModel: SettingsViewModel, onBackClick: () -> Uni
 fun SettingsPlaybackScreen(viewModel: SettingsViewModel, onBackClick: () -> Unit) {
     val state by viewModel.uiState.collectAsState()
     val seekIntervals by viewModel.seekIntervals.state.collectAsState()
+    val connectionSpeed = viewModel.connectionSpeed?.state?.collectAsState()?.value
     val context = LocalContext.current
+    // Re-reads the learned limit and connection speed while the page shows, and
+    // after a network change: a playback since the last visit can change them,
+    // and the page can stay in the back stack under the player.
+    LaunchedEffect(viewModel) { viewModel.connectionSpeed?.follow() }
     LaunchedEffect(state.playbackOverridesReset) {
         val landed = state.playbackOverridesReset ?: return@LaunchedEffect
         Toast.makeText(context, UseProfileSettingsCopy.notice(landed), Toast.LENGTH_SHORT).show()
@@ -143,6 +149,10 @@ fun SettingsPlaybackScreen(viewModel: SettingsViewModel, onBackClick: () -> Unit
                 dolbyVisionEnabled = state.dolbyVisionEnabled,
                 dvProfile7HDR10Fallback = state.dvProfile7HDR10Fallback,
                 pictureInPictureEnabled = state.pictureInPictureEnabled,
+                bufferingQualityMode = state.bufferingQualityMode,
+                bufferingQualityModeSupported = state.bufferingQualityModeSupported,
+                learnedLimit = state.learnedLimit.shownIn(state.bufferingQualityMode),
+                learnedLimitResetFailed = state.learnedLimitResetFailed,
                 deviceOverrides = state.deviceOverrides,
                 onResolutionSelected = viewModel::setPreferredQuality,
                 onMaxBitrateSelected = viewModel::setMaxBitrateKbps,
@@ -150,8 +160,19 @@ fun SettingsPlaybackScreen(viewModel: SettingsViewModel, onBackClick: () -> Unit
                 onDolbyVisionEnabledChanged = viewModel::setDolbyVisionEnabled,
                 onDvProfile7HDR10FallbackChanged = viewModel::setDvProfile7HDR10Fallback,
                 onPictureInPictureEnabledChanged = viewModel::setPictureInPictureEnabled,
+                onBufferingQualityModeChanged = viewModel::setBufferingQualityMode,
+                onResetLearnedLimit = viewModel::resetLearnedLimit,
                 onUseProfileSetting = viewModel::useProfileSetting,
             )
+        }
+        // Under Streaming, whose buffering and learned-limit rows it explains.
+        if (connectionSpeed?.visible == true) {
+            item(key = "connection") {
+                PlaybackConnectionSection(
+                    state = connectionSpeed.shownIn(state.bufferingQualityMode, state.learnedLimit),
+                    onTestSpeed = { viewModel.connectionSpeed?.testSpeed() },
+                )
+            }
         }
         item(key = "cellular") {
             PlaybackCellularSection(

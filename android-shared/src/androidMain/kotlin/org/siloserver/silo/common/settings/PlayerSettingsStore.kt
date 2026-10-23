@@ -1,5 +1,6 @@
 package org.siloserver.silo.common.settings
 
+import org.siloserver.silo.domain.player.BufferingQualityMode
 import org.siloserver.silo.domain.player.IntroSkipMode
 import org.siloserver.silo.model.settings.CellularQuality
 import org.siloserver.silo.model.settings.SubtitleAppearance
@@ -42,6 +43,21 @@ interface PlayerSettingsStore {
      * `docs/design/2026-08-16-intro-skip-mode.md`.
      */
     val introSkipModeFlow: Flow<IntroSkipMode>
+
+    /**
+     * What the player does on Auto when playback keeps buffering —
+     * `playback.buffering_quality_mode`. See the server's
+     * `docs/design/2026-10-17-buffering-quality.md`. The default (`always`)
+     * against a server whose manifest lacks the setting.
+     */
+    val bufferingQualityModeFlow: Flow<BufferingQualityMode>
+
+    /**
+     * True once the active server's manifest is known to define
+     * `playback.buffering_quality_mode`: Settings shows its row only then.
+     */
+    val bufferingQualityModeSupportedFlow: Flow<Boolean>
+        get() = flowOf(true)
 
     // Booleans
     /**
@@ -168,6 +184,7 @@ interface PlayerSettingsStore {
 
     // Setters
     suspend fun setIntroSkipMode(value: IntroSkipMode)
+    suspend fun setBufferingQualityMode(value: BufferingQualityMode)
 
     /**
      * Deprecated shim for the boolean. Routes to [setIntroSkipMode] so a caller

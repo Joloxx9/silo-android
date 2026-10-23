@@ -127,6 +127,7 @@ import org.siloserver.silo.common.player.LetterboxInsets
 import org.siloserver.silo.common.player.PlayWhenReadyReconciliationGate
 import org.siloserver.silo.common.player.PlaybackCapabilityDetector
 import org.siloserver.silo.common.player.PlaybackPreflightListener
+import org.siloserver.silo.common.player.NoticeTone
 import org.siloserver.silo.common.player.PlayerNotice
 import org.siloserver.silo.common.player.video.markerSkipTarget
 import org.siloserver.silo.common.player.video.MarkerSkipTarget
@@ -147,6 +148,8 @@ import org.siloserver.silo.common.player.video.PostResumeVideoStallDetector
 import org.siloserver.silo.common.player.video.VideoPlayerTrackEntry
 import org.siloserver.silo.common.ui.components.ThumbhashImage
 import org.siloserver.silo.playback.subtitleLabelIndicatesHearingImpaired
+import org.siloserver.silo.domain.player.BufferingQualityNotice
+import org.siloserver.silo.domain.player.BufferingQualityPill
 import org.siloserver.silo.domain.player.IntroAutoSkipState
 import org.siloserver.silo.model.playback.PlaybackExecutionPlan
 import org.siloserver.silo.model.playback.SubtitleIdentity
@@ -275,6 +278,8 @@ fun TvPlayerScreen(
     // Up Next On Deck pick: replace this player with one for that item.
     onPlayOnDeckItem: (contentId: String, itemType: String) -> Unit = { _, _ -> },
     preferredFileId: Int? = null,
+    // The viewer picked preferredFileId's version: the start pins it.
+    versionChosen: Boolean = false,
     preferredQuality: String? = null,
     // Watch Party room. When non-null, [WatchPartyPlayback] binds this player
     // to the room for the lifetime of the screen and the room's playback
@@ -310,13 +315,14 @@ fun TvPlayerScreen(
     // the detail screen and replaying actually spins up a fresh player
     // session instead of reusing the cached one bound to the first fileId.
     viewModel: TvPlayerViewModel = koinViewModel(
-        key = "tv-player-$contentId-$libraryId-${preferredFileId ?: "auto"}-${preferredQuality ?: "quality-auto"}-${roomId ?: "solo"}-${resumePositionOverride ?: "server"}-${initialAudioTrackIndex ?: "a"}-${initialSubtitleTrackIndex ?: "s"}-${shuffleId ?: "in-order"}",
+        key = "tv-player-$contentId-$libraryId-${preferredFileId ?: "auto"}${if (versionChosen) "-chosen" else ""}-${preferredQuality ?: "quality-auto"}-${roomId ?: "solo"}-${resumePositionOverride ?: "server"}-${initialAudioTrackIndex ?: "a"}-${initialSubtitleTrackIndex ?: "s"}-${shuffleId ?: "in-order"}",
         parameters = {
             parametersOf(
                 TvPlayerLaunchArgs(
                     libraryId = libraryId,
                     contentId = contentId,
                     preferredFileId = preferredFileId,
+                    versionChosen = versionChosen,
                     preferredQuality = preferredQuality,
                     roomId = roomId,
                     resumePositionOverride = resumePositionOverride,
@@ -375,6 +381,13 @@ fun TvPlayerScreen(
     val activeMarkerSkipTarget by viewModel.manualMarkerSkipTarget.collectAsState()
     val introSkipCountdownRun by viewModel.introSkipCountdownRun.collectAsState()
     val introSkipTimerRunning by viewModel.introSkipTimerRunning.collectAsState()
+    val bufferingPill by viewModel.bufferingPill.collectAsState()
+    val bufferingCountdownRun by viewModel.bufferingCountdownRun.collectAsState()
+    val bufferingTimerRunning by viewModel.bufferingTimerRunning.collectAsState()
+    val bufferingNoticeKind by viewModel.bufferingNotice.collectAsState()
+    val bufferingAutoLimited by viewModel.bufferingAutoLimited.collectAsState()
+    // The buffering pill's focused action, if any: root Select acts on it.
+    var bufferingPillFocusedAction by remember { mutableStateOf<TvBufferingPillAction?>(null) }
     val subtitleAppearance by viewModel.subtitleAppearance.collectAsState()
     val subtitleTextOpacitySupported by viewModel.subtitleTextOpacitySupported.collectAsState()
     val playbackSpeed by viewModel.playbackSpeed.collectAsState()
@@ -636,6 +649,21 @@ fun TvPlayerScreen(
         state.isLoading || state.error != null, qualityOfferVisible,
     )
     val latestManualSkipTarget by rememberUpdatedState(manualSkipTarget)
+    // The intro, recap and credits skip pills and Next Up outrank the
+    // buffering pill: it hides (its timer frozen) while any of them shows.
+    // As displayed: in a room the intro pill shows only to members who may
+    // seek, and the marker pill only when its own gates allow. The HUD shows
+    // no pill, so the buffering pill waits there the same way. Picture in
+    // picture is reported on its own below: an undo pill runs on unseen
+    // there. Leaving the player otherwise pauses or closes it.
+    val bufferingPillBlocked = visibleIntroSkipState.isVisible || manualSkipTarget != null ||
+        state.showNextUp || state.hudOpen
+    LaunchedEffect(bufferingPillBlocked) {
+        viewModel.onOtherPillDisplayed(bufferingPillBlocked)
+    }
+    LaunchedEffect(isInPictureInPictureMode) {
+        viewModel.onPlayerViewHiddenChanged(isInPictureInPictureMode)
+    }
     val latestRoomSnapshot by rememberUpdatedState(roomSnapshot)
     val latestShowPartyPanel by rememberUpdatedState(showPartyPanel)
     val latestShowQuickSubtitlePicker by rememberUpdatedState(showQuickSubtitlePicker)
@@ -691,6 +719,54 @@ fun TvPlayerScreen(
             requestIdleOverlayFocus(TvIdleOverlayFocusTarget.Scrubber)
         }
         return true
+    }
+
+    // Root Select while the buffering pill shows: the action that has focus,
+    // so "Keep quality" works, else the pill's primary action.
+    fun handleBufferingSelect(): Boolean = when (bufferingPillFocusedAction) {
+        TvBufferingPillAction.Lower -> {
+            viewModel.onBufferingLower()
+            true
+        }
+        TvBufferingPillAction.Keep -> {
+            viewModel.onBufferingKeep()
+            true
+        }
+        TvBufferingPillAction.Restore -> {
+            viewModel.onBufferingRestore()
+            true
+        }
+        null -> viewModel.onBufferingSelectPrimary()
+    }
+
+    // The pill takes its focus with it when it hides. Aim where the intro
+    // pill's dismissal does: the scrubber with the controls up, otherwise the
+    // player root, which must own focus while the overlay is hidden.
+    var bufferingPillHeldFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(bufferingPill.isVisible) {
+        if (bufferingPill.isVisible || !bufferingPillHeldFocus) return@LaunchedEffect
+        bufferingPillHeldFocus = false
+        if (viewModel.uiState.value.showControls) {
+            requestIdleOverlayFocus(TvIdleOverlayFocusTarget.Scrubber)
+        } else {
+            requestFocusUntilObserved(
+                maxAttempts = TvContentInitialFocusMaxAttempts,
+                awaitAttempt = { withFrameNanos { } },
+                requestFocus = rootFocus::requestFocus,
+                isFocused = { playerRootHasFocus },
+            )
+        }
+    }
+    val onBufferingPillFocusChanged: (TvBufferingPillAction?) -> Unit = remember(viewModel) {
+        { action ->
+            bufferingPillFocusedAction = action
+            if (action != null) {
+                bufferingPillHeldFocus = true
+            } else if (viewModel.bufferingPill.value.isVisible) {
+                // Focus moved off a pill that stays up (or a menu covered it).
+                bufferingPillHeldFocus = false
+            }
+        }
     }
 
     fun handleManualMarkerSelect() {
@@ -975,6 +1051,11 @@ fun TvPlayerScreen(
             // dispatchKeyEvent, so a countdown Back would otherwise fall
             // through to hiding the controls or exiting the player.
             latestIntroSkipState.isVisible -> viewModel.onDismissIntroPrompt()
+            // Same rank as the intro pill, while it is on screen (the HUD and
+            // Up Next do not compose it). Falls through when the pill went
+            // away first and did not consume the press.
+            bufferingPill.isVisible && !state.hudOpen && !state.showNextUp &&
+                viewModel.onBufferingBack() -> Unit
             lowerQuality != null && !state.showControls -> qualityOffer.dismissed = true
             showQuickSubtitlePicker -> showQuickSubtitlePicker = false
             // On the Up-Next overlay, Back exits the player (matches tvOS, where
@@ -997,6 +1078,10 @@ fun TvPlayerScreen(
     }
 
     DisposableEffect(viewModel, watchParty) {
+        // The downTime of the Back press a pill answered. The rest of that
+        // press is the pill's, even after the hidden pill has recomposed: its
+        // UP must not reach the transport's Back below.
+        var pillBackDownTime = -1L
         val handler: (KeyEvent) -> Boolean = handler@{ event ->
             val playerState = viewModel.uiState.value
             if (event.keyCode == KeyEvent.KEYCODE_BACK) {
@@ -1004,6 +1089,10 @@ fun TvPlayerScreen(
                     "player bridge BACK action=${event.action} hudOpen=${playerState.hudOpen} " +
                         "showControls=${playerState.showControls} paused=${playerState.isPaused} " +
                         "quickSubs=$latestShowQuickSubtitlePicker cleanSeek=$cleanSeekRate"
+                }
+                if (event.downTime == pillBackDownTime) {
+                    if (event.action == KeyEvent.ACTION_UP) pillBackDownTime = -1L
+                    return@handler true
                 }
             }
             if (playerState.streamUrl == null || playerState.isLoading || playerState.error != null) {
@@ -1157,16 +1246,45 @@ fun TvPlayerScreen(
                 !state.isScrubbing
             ) {
                 // Both phases are consumed: a leaked ACTION_UP would reach the
-                // activity's back dispatcher.
+                // activity's back dispatcher. The latch keeps the UP once the
+                // pill has gone.
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                     viewModel.onDismissIntroPrompt()
+                    pillBackDownTime = event.downTime
                 }
                 return@handler true
+            }
+
+            // The buffering pill takes Back at the same rank: Keep quality on
+            // the prompt, hide on the undo. The DOWN is consumed only when the
+            // pill took it; the rest of the press stays with the pill, through
+            // the latch once the pill has gone, so it cannot hide the controls
+            // or reach the activity's back dispatcher.
+            if (bufferingPill.isVisible &&
+                event.keyCode == KeyEvent.KEYCODE_BACK &&
+                cleanSeekRate == 0 &&
+                !state.isScrubbing
+            ) {
+                if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return@handler true
+                if (viewModel.onBufferingBack()) {
+                    pillBackDownTime = event.downTime
+                    return@handler true
+                }
             }
 
             // D-pad directions deliberately do NOT touch the pill: the contract
             // says focus moves as normal and the timer keeps running, so the
             // viewer can look at the transport without losing the offer.
+
+            // Except within the buffering prompt: with one of its actions
+            // focused, Left/Right move between them (the pill keeps focus from
+            // escaping sideways) instead of starting a clean-playback seek.
+            if (horizontalDirection != 0 &&
+                bufferingPill is BufferingQualityPill.Prompt &&
+                bufferingPillFocusedAction != null
+            ) {
+                return@handler false
+            }
 
             if (!playerState.showControls && !playerState.showNextUp && horizontalDirection != 0) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -1197,6 +1315,24 @@ fun TvPlayerScreen(
             ) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) handleManualMarkerSelect()
                 return@handler true
+            }
+
+            // The buffering pill, below the segment-skip pills that outrank
+            // it, and likewise only while the transport is hidden. A focused
+            // pill action takes Select here rather than through Compose: the
+            // root's preview handler would reveal the controls on the press,
+            // and their focus could land before the click did.
+            if (event.action == KeyEvent.ACTION_DOWN &&
+                event.repeatCount == 0 &&
+                bufferingPill.isVisible &&
+                !playerState.showControls &&
+                event.keyCode in setOf(
+                    KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER,
+                )
+            ) {
+                if (handleBufferingSelect()) return@handler true
             }
 
             // The lower-quality offer owns OK and Back while the transport is
@@ -1513,7 +1649,12 @@ fun TvPlayerScreen(
                 }
             }
             player.addAnalyticsListener(listener)
-            onDispose { player.removeAnalyticsListener(listener) }
+            // The buffering-quality adapter hears the in-process player.
+            val detachBuffering = viewModel.bufferingQualityAdapter.attach(player)
+            onDispose {
+                player.removeAnalyticsListener(listener)
+                detachBuffering()
+            }
         }
     }
 
@@ -1690,6 +1831,12 @@ fun TvPlayerScreen(
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (isActive) {
                 val decoderCounters = (sessionPlayer as? androidx.media3.exoplayer.ExoPlayer)?.videoDecoderCounters
+                // Buffered-position growth is the adapter's evidence that data
+                // is still arriving.
+                viewModel.bufferingQualityAdapter.sampleBuffer(
+                    SystemClock.elapsedRealtime(),
+                    controller.bufferedPosition.coerceAtLeast(0L),
+                )
                 val reason = startupStallDetector.sample(
                     sessionKey = sessionKey,
                     nowMs = SystemClock.elapsedRealtime(),
@@ -1704,9 +1851,29 @@ fun TvPlayerScreen(
                     decoderDroppedBufferCount = decoderCounters?.droppedBufferCount ?: 0,
                 )
                 if (reason != null) {
-                    Log.i(TAG, "Startup stall fallback: $reason")
-                    viewModel.onUnsupportedPlayback(reason, state.transportMountNonce)
-                    return@repeatOnLifecycle
+                    if (
+                        viewModel.bufferingQualityAdapter.ownsStartupStall(
+                            reason = reason,
+                            nowMs = SystemClock.elapsedRealtime(),
+                            controllerEnabled = viewModel.bufferingQualityEnabled,
+                        )
+                    ) {
+                        // A slow plan that is still receiving data belongs to
+                        // the buffering-quality controller, and one in an
+                        // outage to the reconnect path: no same-plan reopen
+                        // and no failure replan, and the loop keeps sampling.
+                        Log.i(
+                            TAG,
+                            "startup_stall owned_by=${if (viewModel.bufferingQualityAdapter.transportTroubleActive) "outage" else "buffering_quality"} " +
+                                "classification=${reason.classification} " +
+                                "stalled_for_ms=${reason.stalledForMs}",
+                        )
+                        startupStallDetector.onStallHandedOff(SystemClock.elapsedRealtime())
+                    } else {
+                        Log.i(TAG, "Startup stall fallback: $reason")
+                        viewModel.onUnsupportedPlayback(reason, state.transportMountNonce)
+                        return@repeatOnLifecycle
+                    }
                 }
                 val sanitizedSamples = PlaybackRuntimeCorrectionMetrics.consumeDolbyVisionHdr10PlusSamples()
                 if (sanitizedSamples > 0 && !dvSanitizerReported) {
@@ -1906,6 +2073,8 @@ fun TvPlayerScreen(
             // Watch Party playback stays on the saved address.
             allowsLocalRoute = roomId.isNullOrBlank(),
         )
+        // The same plan, remounted: its coming wait is a reload, not a stall.
+        viewModel.bufferingQualityAdapter.markReload()
         backend.refresh(mediaSpec)
         viewModel.onSubtitleCuesMounted(state.subtitleCueRevisions)
     }
@@ -2286,6 +2455,7 @@ fun TvPlayerScreen(
                             audioTracks = state.audioTracks,
                             videoQualities = state.videoQualities,
                             videoQualityPreference = state.videoQualityPreference,
+                            autoQualityLimited = bufferingAutoLimited,
                             fileVersions = state.fileVersions,
                             selectedFileId = state.selectedFileId ?: state.mediaFileId,
                             onSelectFileVersion = viewModel::onSelectFileVersion,
@@ -2485,9 +2655,24 @@ fun TvPlayerScreen(
             state.isLoading -> TvLoadingScreen()
         }
 
+        val bufferingPlayerNotice = when (bufferingNoticeKind) {
+            BufferingQualityNotice.LOWERED ->
+                PlayerNotice(stringResource(R.string.buffering_quality_lowered), NoticeTone.Info)
+            BufferingQualityNotice.CANT_LOWER ->
+                PlayerNotice(stringResource(R.string.buffering_quality_cant_lower), NoticeTone.Info)
+            null -> null
+        }
         TvPlayerOverlays(
             isInPictureInPictureMode = isInPictureInPictureMode,
-            notice = notice,
+            // Lifecycle notices (an outage, say) win over buffering ones.
+            notice = notice ?: bufferingPlayerNotice,
+            bufferingPill = bufferingPill,
+            bufferingCountdownRun = bufferingCountdownRun,
+            bufferingTimerRunning = bufferingTimerRunning,
+            onBufferingLower = viewModel::onBufferingLower,
+            onBufferingKeep = viewModel::onBufferingKeep,
+            onBufferingRestore = viewModel::onBufferingRestore,
+            onBufferingPillFocusChanged = onBufferingPillFocusChanged,
             subtitleSyncNotice = viewModel.subtitleSyncNotice,
             remoteMessage = remoteMessage,
             roomSnapshot = roomSnapshot,
@@ -4012,9 +4197,18 @@ private fun TvPlayerOverlays(
     onPlayOnDeckItem: (TvOnDeckItem) -> Unit = {},
     /** Watch Party: the lower rung offered after repeated stalls, or null. */
     qualityOfferLabel: String? = null,
+    bufferingPill: BufferingQualityPill = BufferingQualityPill.Hidden,
+    bufferingCountdownRun: Int = 0,
+    bufferingTimerRunning: Boolean = false,
+    onBufferingLower: () -> Unit = {},
+    onBufferingKeep: () -> Unit = {},
+    onBufferingRestore: () -> Unit = {},
+    onBufferingPillFocusChanged: (TvBufferingPillAction?) -> Unit = {},
 ) {
         // Lifecycle-driven notice toast (top-start). Slides in for outage
-        // recovery, fades out when the lifecycle clears the notice.
+        // recovery, fades out when the lifecycle clears the notice. The
+        // buffering-quality pill sits under it in the same anchor, and like
+        // the intro pill is not composed while a menu (the HUD, Up Next) is up.
         if (!isInPictureInPictureMode) {
             Box(
                 modifier = Modifier
@@ -4022,7 +4216,19 @@ private fun TvPlayerOverlays(
                     .padding(top = 32.dp, start = 32.dp),
                 contentAlignment = Alignment.TopStart,
             ) {
-                TvPlayerNoticeOverlay(notice = notice)
+                TvPlayerNoticeOverlay(
+                    notice = notice,
+                    bufferingPill = if (hudOpen || showNextUp) BufferingQualityPill.Hidden else bufferingPill,
+                    bufferingCountdownRun = bufferingCountdownRun,
+                    bufferingTimerRunning = bufferingTimerRunning,
+                    // The same rule as the intro pill: the scrubber commits
+                    // its seek on focus loss.
+                    bufferingPillMayTakeFocus = introBannerMayTakeFocus,
+                    onBufferingLower = onBufferingLower,
+                    onBufferingKeep = onBufferingKeep,
+                    onBufferingRestore = onBufferingRestore,
+                    onBufferingPillFocusChanged = onBufferingPillFocusChanged,
+                )
             }
         }
 

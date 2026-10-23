@@ -195,6 +195,7 @@ internal fun PlaybackPlanV3.toSessionResponse(
         effectiveMediaFileId = effectiveFileId,
         effectiveRecipe = effectiveRecipe,
         sourceFile = source,
+        bandwidthLimit = bandwidthLimit,
         activeQuality = activeQuality,
         activeQualityReported = activeQualityReported,
     )

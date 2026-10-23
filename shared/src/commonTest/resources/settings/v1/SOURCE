@@ -1,6 +1,6 @@
 repository=https://github.com/Silo-Server/silo-server
 path=contracts/settings/v1
-manifest_revision=20
+manifest_revision=22
 fixture_version=1
 
 Both files are byte-identical copies of the server's canonical contract; do not

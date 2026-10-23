@@ -288,6 +288,7 @@ internal data class EpisodeListItemReadV2(
     val files: List<EpisodeFileReadV2> = emptyList(),
     @SerialName("pending_translation_language") val pendingTranslationLanguage: String? = null,
     @SerialName("machine_translated_fields") val machineTranslatedFields: List<String> = emptyList(),
+    val availability: String? = null,
 ) {
     fun toDomain() = EpisodeListItem(
         contentId = contentId,
@@ -307,6 +308,7 @@ internal data class EpisodeListItemReadV2(
         files = files.map { it.toDomain() },
         pendingTranslationLanguage = pendingTranslationLanguage,
         machineTranslatedFields = machineTranslatedFields,
+        availability = availability,
     )
 }
 

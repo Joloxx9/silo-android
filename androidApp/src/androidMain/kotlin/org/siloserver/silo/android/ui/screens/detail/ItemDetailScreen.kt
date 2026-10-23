@@ -713,6 +713,8 @@ fun ItemDetailScreen(
                         }
                         SeriesDetailContent(
                             translation = translationSlot,
+                            requestedSeasons = state.missingRequests.requestedSeasons,
+                            onRequestSeason = viewModel::requestSeason.takeIf { state.missingRequests.canRequest },
                             detail = detail,
                             similarItems = state.similarItems,
                             seasons = state.seasons,
@@ -1093,6 +1095,17 @@ fun ItemDetailScreen(
             SiloCastTargetPickerSheet(
                 onDismiss = { showRemoteTargetPicker = false },
                 controller = siloCastController,
+            )
+        }
+
+        if (state.seasonRequestFailed) {
+            SiloConfirmDialog(
+                title = "Couldn't Request the Season",
+                body = "Please check your connection and try again.",
+                confirmLabel = "OK",
+                destructive = false,
+                onConfirm = viewModel::onSeasonRequestFailureShown,
+                onDismiss = viewModel::onSeasonRequestFailureShown,
             )
         }
 

@@ -192,10 +192,13 @@ class ItemDetailViewModel(
         val current = _uiState.value
         val media = current.missingRequests.media ?: return
         if (current.isRequestingSeason || season in current.missingRequests.requestedSeasons) return
+        val contentId = current.detail?.contentId ?: return
         _uiState.update { it.copy(isRequestingSeason = true, seasonRequestFailed = false) }
         viewModelScope.launch {
             val ok = service.request(media, season)
             _uiState.update {
+                // A detail cleared or replaced while the request ran keeps its own state.
+                if (it.detail?.contentId != contentId) return@update it
                 it.copy(
                     isRequestingSeason = false,
                     seasonRequestFailed = !ok,
@@ -798,6 +801,11 @@ class ItemDetailViewModel(
 
             for (season in accumulator.remainingSeasons(seasons)) {
                 if (!routeActive) return@launch
+                // A season the library lacks entirely has no files to roll up.
+                if (season.isMissing) {
+                    accumulator.recordSeason(season.seasonNumber, emptyList())
+                    continue
+                }
                 val descriptionRevision = episodeDescriptionRevisions[season.seasonNumber] ?: 0L
                 when (val r = catalogRepository.getEpisodes(seriesId, season.seasonNumber, libraryId = libraryId, missing = missing)) {
                     is ApiResult.Success -> {
@@ -988,10 +996,12 @@ class ItemDetailViewModel(
         // metadata names an episode outside that season, fall back normally
         // instead of unexpectedly selecting it after a later manual chip tap.
         pendingInitialEpisodeContentId = null
-        val preferred = routedEpisode ?: episodes.firstOrNull {
+        // Missing episodes are never a fallback while the season holds one to play.
+        val playable = episodes.filterNot { it.isMissingFromLibrary }.ifEmpty { episodes }
+        val preferred = routedEpisode ?: playable.firstOrNull {
             (it.userData?.positionSeconds ?: 0.0) > 0.0 && it.userData?.played != true
-        } ?: episodes.firstOrNull { it.userData?.played != true }
-            ?: episodes.first()
+        } ?: playable.firstOrNull { it.userData?.played != true }
+            ?: playable.first()
         _uiState.update {
             it.copy(
                 selectedEpisodeContentId = preferred.contentId,

@@ -1,6 +1,7 @@
 package org.siloserver.silo.repository
 
 import org.siloserver.silo.domain.settings.CatalogLanguageRevision
+import org.siloserver.silo.model.catalog.MissingEpisodes
 import org.siloserver.silo.repository.port.CatalogCacheScope
 import org.siloserver.silo.model.catalog.CatalogFiltersResponse
 import org.siloserver.silo.model.catalog.CatalogQueryGroup
@@ -255,8 +256,15 @@ class CatalogRepository(
      * flight nor falls back to the cache, both of which can still hold the
      * state from before a write the caller just made.
      */
-    suspend fun getSeasons(seriesId: String, libraryId: Int? = null, fresh: Boolean = false): ApiResult<SeasonsResponse> {
-        if (libraryId != null) return catalogApi.getSeasons(seriesId, libraryId)
+    suspend fun getSeasons(
+        seriesId: String,
+        libraryId: Int? = null,
+        fresh: Boolean = false,
+        missing: MissingEpisodes = MissingEpisodes.NONE,
+    ): ApiResult<SeasonsResponse> {
+        // A list that includes missing seasons is never cached: every offline
+        // and coalesced reader expects the library's own.
+        if (libraryId != null || missing != MissingEpisodes.NONE) return catalogApi.getSeasons(seriesId, libraryId, missing)
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision
         if (fresh) return fetchSeasons(seriesId, requestIdentityGeneration, requestLanguageRevision, serveCacheOnFailure = false)
@@ -283,8 +291,12 @@ class CatalogRepository(
         if (libraryId != null) null else readLocalizedCache { catalogCache.getCachedSeasons(seriesId) }
 
     /** Cache-first season list for speculative detail navigation; joins a warm-up still in flight. */
-    suspend fun getSeasonsForPrefetch(seriesId: String, libraryId: Int? = null): ApiResult<SeasonsResponse> {
-        if (libraryId != null) return catalogApi.getSeasons(seriesId, libraryId)
+    suspend fun getSeasonsForPrefetch(
+        seriesId: String,
+        libraryId: Int? = null,
+        missing: MissingEpisodes = MissingEpisodes.NONE,
+    ): ApiResult<SeasonsResponse> {
+        if (libraryId != null || missing != MissingEpisodes.NONE) return catalogApi.getSeasons(seriesId, libraryId, missing)
         inFlight(seasonsInFlight, DetailRequestKey(identityTransitions.generation.value, currentLanguageRevision, seriesId))
             ?.let { return it.await() }
         getCachedSeasons(seriesId)?.let { return ApiResult.Success(it) }
@@ -302,8 +314,11 @@ class CatalogRepository(
         libraryId: Int? = null,
         fresh: Boolean = false,
         surface: ArtworkSurface = ArtworkSurface.EPISODES,
+        missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<EpisodesResponse> {
-        if (libraryId != null) return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface))
+        if (libraryId != null || missing != MissingEpisodes.NONE) {
+            return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface), missing)
+        }
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision
         if (fresh) {
@@ -347,8 +362,11 @@ class CatalogRepository(
         seasonNumber: Int,
         libraryId: Int? = null,
         surface: ArtworkSurface = ArtworkSurface.EPISODES,
+        missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<EpisodesResponse> {
-        if (libraryId != null) return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface))
+        if (libraryId != null || missing != MissingEpisodes.NONE) {
+            return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface), missing)
+        }
         val key = EpisodesRequestKey(identityTransitions.generation.value, currentLanguageRevision, seriesId, seasonNumber, surface)
         inFlight(episodesInFlight, key)?.let { return it.await() }
         getCachedEpisodes(seriesId, seasonNumber, surface = surface)?.let {

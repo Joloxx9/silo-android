@@ -58,6 +58,13 @@ import kotlinx.coroutines.ensureActive
  * UI state for the item detail screen.
  */
 data class ItemDetailUiState(
+    /** Request state for the seasons this series page lists as missing. */
+    val missingRequests: org.siloserver.silo.domain.catalog.MissingSeasonRequests =
+        org.siloserver.silo.domain.catalog.MissingSeasonRequests(),
+    /** A season request is on its way to the server. */
+    val isRequestingSeason: Boolean = false,
+    /** The last season request failed; the screen shows it once. */
+    val seasonRequestFailed: Boolean = false,
     val isLoading: Boolean = true,
     val detail: ItemDetail? = null,
     val similarItems: List<org.siloserver.silo.model.catalog.BrowseItem> = emptyList(),
@@ -155,7 +162,56 @@ class ItemDetailViewModel(
     savedStateHandle: SavedStateHandle,
     private val userItemState: org.siloserver.silo.repository.port.UserItemStatePort =
         org.siloserver.silo.repository.port.NoOpUserItemStatePort,
+    private val missingSeasons: org.siloserver.silo.domain.catalog.MissingSeasons? = null,
 ) : ViewModel() {
+    /**
+     * What the library lacks that this page's season and episode lists
+     * include. Only these lists ask for it; playback and downloads read the
+     * library alone.
+     */
+    private var missing = org.siloserver.silo.model.catalog.MissingEpisodes.NONE
+    private var missingResolved = false
+
+    private suspend fun resolveMissingScope() {
+        if (missingResolved) return
+        missing = missingSeasons?.scope() ?: org.siloserver.silo.model.catalog.MissingEpisodes.NONE
+        missingResolved = true
+    }
+
+    private fun loadMissingRequests(detail: ItemDetail) {
+        val service = missingSeasons ?: return
+        viewModelScope.launch {
+            val requests = service.requests(detail.tmdbId?.toIntOrNull(), missing)
+            _uiState.update { if (it.detail?.contentId == detail.contentId) it.copy(missingRequests = requests) else it }
+        }
+    }
+
+    /** Requests one missing season of this series. */
+    fun requestSeason(season: Int) {
+        val service = missingSeasons ?: return
+        val current = _uiState.value
+        val media = current.missingRequests.media ?: return
+        if (current.isRequestingSeason || season in current.missingRequests.requestedSeasons) return
+        _uiState.update { it.copy(isRequestingSeason = true, seasonRequestFailed = false) }
+        viewModelScope.launch {
+            val ok = service.request(media, season)
+            _uiState.update {
+                it.copy(
+                    isRequestingSeason = false,
+                    seasonRequestFailed = !ok,
+                    missingRequests = if (ok) {
+                        it.missingRequests.copy(requestedSeasons = it.missingRequests.requestedSeasons + season)
+                    } else {
+                        it.missingRequests
+                    },
+                )
+            }
+        }
+    }
+
+    fun onSeasonRequestFailureShown() {
+        _uiState.update { it.copy(seasonRequestFailed = false) }
+    }
     /** Access changes this ViewModel has applied, kept while its screen is away. */
     val accessChanges = org.siloserver.silo.network.AccessChangeCursor()
 
@@ -661,13 +717,15 @@ class ItemDetailViewModel(
 
     private fun loadSeasons(seriesId: String) {
         viewModelScope.launch {
+            resolveMissingScope()
+            _uiState.value.detail?.takeIf { it.type.lowercase() == "series" }?.let(::loadMissingRequests)
             // Continue Watching warms the parent series before navigation. Use
             // that fresh cache immediately only for that targeted route; direct
             // card opens retain their normal live season refresh.
             val result = if (initialEpisodeContentId != null) {
-                catalogRepository.getSeasonsForPrefetch(seriesId, libraryId = libraryId)
+                catalogRepository.getSeasonsForPrefetch(seriesId, libraryId = libraryId, missing = missing)
             } else {
-                catalogRepository.getSeasons(seriesId, libraryId = libraryId)
+                catalogRepository.getSeasons(seriesId, libraryId = libraryId, missing = missing)
             }
             when (result) {
                 is ApiResult.Success -> {
@@ -741,7 +799,7 @@ class ItemDetailViewModel(
             for (season in accumulator.remainingSeasons(seasons)) {
                 if (!routeActive) return@launch
                 val descriptionRevision = episodeDescriptionRevisions[season.seasonNumber] ?: 0L
-                when (val r = catalogRepository.getEpisodes(seriesId, season.seasonNumber, libraryId = libraryId)) {
+                when (val r = catalogRepository.getEpisodes(seriesId, season.seasonNumber, libraryId = libraryId, missing = missing)) {
                     is ApiResult.Success -> {
                         val episodes = withLocalProgress(r.data.episodes)
                         cacheEpisodes(season.seasonNumber, episodes, descriptionRevision)
@@ -855,6 +913,18 @@ class ItemDetailViewModel(
             _uiState.value.selectedEpisodeDetail != null
         ) return
         selectedEpisodeLoadJob?.cancel()
+        if (_uiState.value.episodes.any { it.contentId == contentId && it.isMissingFromLibrary }) {
+            // An episode the library lacks has no playback detail to read:
+            // the hero offers its season's request instead.
+            _uiState.update {
+                it.copy(
+                    selectedEpisodeContentId = contentId,
+                    selectedEpisodeDetail = null,
+                    isLoadingSelectedEpisodeDetail = false,
+                )
+            }
+            return
+        }
         _uiState.update {
             it.copy(
                 selectedEpisodeContentId = contentId,
@@ -875,6 +945,7 @@ class ItemDetailViewModel(
         val state = _uiState.value
         val contentId = state.selectedEpisodeContentId ?: return
         if (state.selectedEpisodeDetail != null || state.isLoadingSelectedEpisodeDetail) return
+        if (state.episodes.any { it.contentId == contentId && it.isMissingFromLibrary }) return
         _uiState.update { it.copy(isLoadingSelectedEpisodeDetail = true) }
         loadSelectedEpisodeDetail(contentId)
     }
@@ -980,9 +1051,9 @@ class ItemDetailViewModel(
                 )
             }
             val result = if (!forceRefresh && preferPrefetched) {
-                catalogRepository.getEpisodesForPrefetch(seriesId, seasonNumber, libraryId = libraryId)
+                catalogRepository.getEpisodesForPrefetch(seriesId, seasonNumber, libraryId = libraryId, missing = missing)
             } else {
-                catalogRepository.getEpisodes(seriesId, seasonNumber, libraryId = libraryId, fresh = fresh)
+                catalogRepository.getEpisodes(seriesId, seasonNumber, libraryId = libraryId, fresh = fresh, missing = missing)
             }
             when (result) {
                 is ApiResult.Success -> {
@@ -1346,7 +1417,7 @@ class ItemDetailViewModel(
                             seriesId,
                             seasonNumber,
                             libraryId = libraryId,
-                            fresh = true,
+                            fresh = true, missing = missing,
                         )
                     ) {
                         is ApiResult.Success -> if (metadataAiRepository.isCurrent(owner)) {
@@ -1558,6 +1629,7 @@ class ItemDetailViewModel(
 
     /** Episode ids of a season whose page is not loaded; empty if the read fails. */
     private suspend fun seasonEpisodeIds(seriesId: String, seasonNumber: Int): List<String> =
+        // Library episodes only: these ids get marked watched.
         when (val result = catalogRepository.getEpisodes(seriesId, seasonNumber, libraryId = libraryId, fresh = true)) {
             is ApiResult.Success -> result.data.episodes.map { it.contentId }
             is ApiResult.Error,
@@ -1593,7 +1665,7 @@ class ItemDetailViewModel(
     private fun refreshSeasonsQuietly(seriesId: String, fresh: Boolean = false) {
         val generation = ++seasonsRefreshGeneration
         viewModelScope.launch {
-            when (val result = catalogRepository.getSeasons(seriesId, libraryId = libraryId, fresh = fresh)) {
+            when (val result = catalogRepository.getSeasons(seriesId, libraryId = libraryId, fresh = fresh, missing = missing)) {
                 is ApiResult.Success -> {
                     val seasons = result.data.seasons.sortedForDisplay()
                     _uiState.update { state ->

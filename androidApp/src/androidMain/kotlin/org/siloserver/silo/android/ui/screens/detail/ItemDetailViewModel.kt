@@ -189,13 +189,21 @@ class ItemDetailViewModel(
         val scope = service.scope()
         if (scope == missing) return
         missing = scope
+        // Pages read in the old scope are dropped so the next load reads again.
+        _uiState.update { it.copy(episodesBySeason = emptyMap()) }
         loadMissingRequests(detail)
     }
 
+    /** Moves with every request-state read, so only the newest one lands. */
+    private var missingRequestsGeneration = 0L
+
     private fun loadMissingRequests(detail: ItemDetail) {
         val service = missingSeasons ?: return
+        val generation = ++missingRequestsGeneration
+        val scope = missing
         viewModelScope.launch {
-            val requests = service.requests(detail.tmdbId?.toIntOrNull(), missing)
+            val requests = service.requests(detail.tmdbId?.toIntOrNull(), scope)
+            if (generation != missingRequestsGeneration) return@launch
             _uiState.update { if (it.detail?.contentId == detail.contentId) it.copy(missingRequests = requests) else it }
         }
     }

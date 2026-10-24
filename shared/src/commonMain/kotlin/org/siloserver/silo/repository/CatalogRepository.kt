@@ -265,10 +265,12 @@ class CatalogRepository(
         if (libraryId != null) return catalogApi.getSeasons(seriesId, libraryId, missing)
         // A list that includes missing seasons is never cached: every offline
         // and coalesced reader expects the library's own. When it cannot be
-        // read, the library's own list (cached when offline) stands in.
+        // read for a reason the cache may answer, the library's own list
+        // (cached when offline) stands in.
         if (missing != MissingEpisodes.NONE) {
             val live = catalogApi.getSeasons(seriesId, null, missing)
-            return if (live is ApiResult.Success) live else getSeasons(seriesId, fresh = fresh)
+            // Only a failure the cache may answer falls back; a refusal stands.
+            return if (live !is ApiResult.Success && live.canServeCache()) getSeasons(seriesId, fresh = fresh) else live
         }
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision
@@ -329,7 +331,11 @@ class CatalogRepository(
         // own list stands in when they cannot be read.
         if (missing != MissingEpisodes.NONE) {
             val live = catalogApi.getEpisodes(seriesId, seasonNumber, null, artwork.request(surface), missing)
-            return if (live is ApiResult.Success) live else getEpisodes(seriesId, seasonNumber, fresh = fresh, surface = surface)
+            return if (live !is ApiResult.Success && live.canServeCache()) {
+                getEpisodes(seriesId, seasonNumber, fresh = fresh, surface = surface)
+            } else {
+                live
+            }
         }
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision

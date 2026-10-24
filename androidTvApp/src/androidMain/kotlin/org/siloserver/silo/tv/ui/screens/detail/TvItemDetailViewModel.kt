@@ -402,15 +402,19 @@ class TvItemDetailViewModel(
     }
 
     /**
-     * Reads the scope again on a return, since the setting may have changed
-     * elsewhere; a change refreshes the request state, and the lists the
-     * refresh reloads read in the new scope.
+     * Reads the scope and the request state again on a return, since either
+     * may have changed elsewhere; the lists the refresh reloads read in the
+     * new scope.
      */
     private suspend fun refreshMissingScope(detail: ItemDetail) {
         val service = missingSeasons ?: return
         if (!missingResolved) return
         val scope = service.scope()
-        if (scope == missing) return
+        if (scope == missing) {
+            // Another client may have requested a season meanwhile.
+            if (scope != org.siloserver.silo.model.catalog.MissingEpisodes.NONE) loadMissingRequests(detail)
+            return
+        }
         missing = scope
         // Pages read in the old scope are dropped so the next load reads again.
         episodeWindow.clear()

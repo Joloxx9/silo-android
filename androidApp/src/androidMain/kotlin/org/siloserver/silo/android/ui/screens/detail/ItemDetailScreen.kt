@@ -894,9 +894,10 @@ fun ItemDetailScreen(
                                 }
                             },
                             // A series enters a party through the episode Play
-                            // would start: the selected one, else next up.
+                            // would start: the selected one, else next up. A
+                            // missing episode has nothing to play, so no party.
                             partyAction = partyActions.actionFor(
-                                (selectedEpisode ?: nextEpisode)?.let { episode ->
+                                (selectedEpisode ?: nextEpisode)?.takeUnless { it.isMissingFromLibrary }?.let { episode ->
                                     WatchPartyItem(
                                         contentId = episode.contentId,
                                         contentType = "episode",

@@ -1885,7 +1885,9 @@ private fun HeroActionRow(
             ) {
                 // An episode the library lacks has nothing to play: the
                 // primary pill requests its season instead.
-                val missingEpisode = nextUp?.takeIf { it.isMissingFromLibrary }
+                // A season switch keeps the old episode until the new season
+                // loads; it is no request target until it is ready.
+                val missingEpisode = nextUp?.takeIf { it.isMissingFromLibrary && state.nextUpTargetReady }
                 val missingSeasonRequested = missingEpisode != null &&
                     missingEpisode.seasonNumber in state.missingRequests.requestedSeasons
                 TvPrimaryPillButton(

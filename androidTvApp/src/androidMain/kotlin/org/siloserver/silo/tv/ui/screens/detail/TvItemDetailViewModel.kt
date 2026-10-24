@@ -412,6 +412,8 @@ class TvItemDetailViewModel(
         val scope = service.scope()
         if (scope == missing) return
         missing = scope
+        // Pages read in the old scope are dropped so the next load reads again.
+        episodeWindow.clear()
         loadMissingRequests(detail)
     }
 

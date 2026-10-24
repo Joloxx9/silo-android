@@ -1807,7 +1807,7 @@ private fun HeroActionRow(
             libraryId = libraryId,
             spoilers = WatchPartySpoilers.of(detail),
         )
-        detail.type == "series" && nextUp != null && playReady -> tvWatchPartyItem(
+        detail.type == "series" && nextUp != null && playReady && !nextUp.isMissingFromLibrary -> tvWatchPartyItem(
             contentId = nextUp.contentId,
             contentType = "episode",
             title = nextUp.title?.takeIf { it.isNotBlank() } ?: "Episode ${nextUp.episodeNumber}",

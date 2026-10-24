@@ -178,6 +178,20 @@ class ItemDetailViewModel(
         missingResolved = true
     }
 
+    /**
+     * Reads the scope again on a return, since the setting may have changed
+     * elsewhere; a change refreshes the request state, and the lists the
+     * refresh reloads read in the new scope.
+     */
+    private suspend fun refreshMissingScope(detail: ItemDetail) {
+        val service = missingSeasons ?: return
+        if (!missingResolved) return
+        val scope = service.scope()
+        if (scope == missing) return
+        missing = scope
+        loadMissingRequests(detail)
+    }
+
     private fun loadMissingRequests(detail: ItemDetail) {
         val service = missingSeasons ?: return
         viewModelScope.launch {
@@ -638,6 +652,7 @@ class ItemDetailViewModel(
         quietDetailJob?.cancel()
         quietDetailShowsRefusal = showRefusal
         quietDetailJob = viewModelScope.launch {
+            refreshMissingScope(current)
             // Local overlay first: the player's final position write is already
             // on disk, so the label corrects before the server round-trip.
             val overlaid = withLocalProgress(current)

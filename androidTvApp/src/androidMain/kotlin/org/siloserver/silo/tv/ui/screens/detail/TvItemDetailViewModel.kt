@@ -401,6 +401,20 @@ class TvItemDetailViewModel(
         missingResolved = true
     }
 
+    /**
+     * Reads the scope again on a return, since the setting may have changed
+     * elsewhere; a change refreshes the request state, and the lists the
+     * refresh reloads read in the new scope.
+     */
+    private suspend fun refreshMissingScope(detail: ItemDetail) {
+        val service = missingSeasons ?: return
+        if (!missingResolved) return
+        val scope = service.scope()
+        if (scope == missing) return
+        missing = scope
+        loadMissingRequests(detail)
+    }
+
     private fun loadMissingRequests(detail: ItemDetail) {
         val service = missingSeasons ?: return
         viewModelScope.launch {
@@ -848,6 +862,7 @@ class TvItemDetailViewModel(
         quietDetailShowsRefusal = showRefusal
         quietPlaybackReturn = playbackReturn
         quietDetailJob = viewModelScope.launch {
+            refreshMissingScope(current)
             // Local overlay first: the player's final position write is already
             // on disk, so the label corrects before the server round-trip.
             val overlaid = withLocalProgress(current)
@@ -1720,7 +1735,10 @@ class TvItemDetailViewModel(
                     refreshNextUp(publishedEpisodes)
                     recordCarouselSeason(seasonNumber, publishedEpisodes)
                     val revalidationComplete =
-                        refreshEpisodeFavoriteStates(episodes, revalidate = revalidateFavorites)
+                        refreshEpisodeFavoriteStates(
+                            episodes.filterNot { it.isMissingFromLibrary },
+                            revalidate = revalidateFavorites,
+                        )
                     // Caught up only now, and only if every id we were asked to
                     // re-check actually answered. Advancing on read would drop
                     // the signal when the reload failed; advancing after a
@@ -1951,7 +1969,11 @@ class TvItemDetailViewModel(
         }
 
         val previousId = _uiState.value.nextUpEpisode?.contentId
-        if (nextUp?.contentId == previousId && _uiState.value.nextUpEpisode != null) {
+        // A target that became missing, or held, under the same id takes the
+        // full path below, which clears or reloads its playback detail.
+        if (nextUp?.contentId == previousId && _uiState.value.nextUpEpisode != null &&
+            nextUp?.isMissingFromLibrary == _uiState.value.nextUpEpisode?.isMissingFromLibrary
+        ) {
             // Same target — just refresh the snapshot (userData may have changed)
             // without re-loading playback detail. A fresher row also carries
             // the episode's translated description into the hero.
@@ -2529,7 +2551,7 @@ class TvItemDetailViewModel(
                     _uiState.update { it.copy(isFavorite = false, inWatchlist = false, episodeFavoriteStates = emptyMap()) }
                 } else {
                     loadUserState()
-                    refreshEpisodeFavoriteStates(_uiState.value.episodes, revalidate = null)
+                    refreshEpisodeFavoriteStates(_uiState.value.episodes.filterNot { it.isMissingFromLibrary }, revalidate = null)
                 }
             }
         }

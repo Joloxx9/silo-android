@@ -655,9 +655,10 @@ fun ItemDetailScreen(
                     }
 
                     detail.type == "series" -> {
+                        // A missing episode is never the fallback play target.
                         val nextEpisode = state.episodes.firstOrNull { ep ->
-                            ep.userData?.played != true
-                        } ?: state.episodes.firstOrNull()
+                            !ep.isMissingFromLibrary && ep.userData?.played != true
+                        } ?: state.episodes.firstOrNull { ep -> !ep.isMissingFromLibrary }
                         val nextEpisodeLabel = nextEpisode?.let { ep ->
                             "S${ep.seasonNumber}·E${ep.episodeNumber}"
                         }

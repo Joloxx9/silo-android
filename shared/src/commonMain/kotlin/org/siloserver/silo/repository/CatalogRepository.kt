@@ -262,9 +262,14 @@ class CatalogRepository(
         fresh: Boolean = false,
         missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<SeasonsResponse> {
+        if (libraryId != null) return catalogApi.getSeasons(seriesId, libraryId, missing)
         // A list that includes missing seasons is never cached: every offline
-        // and coalesced reader expects the library's own.
-        if (libraryId != null || missing != MissingEpisodes.NONE) return catalogApi.getSeasons(seriesId, libraryId, missing)
+        // and coalesced reader expects the library's own. When it cannot be
+        // read, the library's own list (cached when offline) stands in.
+        if (missing != MissingEpisodes.NONE) {
+            val live = catalogApi.getSeasons(seriesId, null, missing)
+            return if (live is ApiResult.Success) live else getSeasons(seriesId, fresh = fresh)
+        }
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision
         if (fresh) return fetchSeasons(seriesId, requestIdentityGeneration, requestLanguageRevision, serveCacheOnFailure = false)
@@ -296,7 +301,8 @@ class CatalogRepository(
         libraryId: Int? = null,
         missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<SeasonsResponse> {
-        if (libraryId != null || missing != MissingEpisodes.NONE) return catalogApi.getSeasons(seriesId, libraryId, missing)
+        if (libraryId != null) return catalogApi.getSeasons(seriesId, libraryId, missing)
+        if (missing != MissingEpisodes.NONE) return getSeasons(seriesId, missing = missing)
         inFlight(seasonsInFlight, DetailRequestKey(identityTransitions.generation.value, currentLanguageRevision, seriesId))
             ?.let { return it.await() }
         getCachedSeasons(seriesId)?.let { return ApiResult.Success(it) }
@@ -316,8 +322,14 @@ class CatalogRepository(
         surface: ArtworkSurface = ArtworkSurface.EPISODES,
         missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<EpisodesResponse> {
-        if (libraryId != null || missing != MissingEpisodes.NONE) {
+        if (libraryId != null) {
             return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface), missing)
+        }
+        // As for seasons: missing episodes are never cached, and the library's
+        // own list stands in when they cannot be read.
+        if (missing != MissingEpisodes.NONE) {
+            val live = catalogApi.getEpisodes(seriesId, seasonNumber, null, artwork.request(surface), missing)
+            return if (live is ApiResult.Success) live else getEpisodes(seriesId, seasonNumber, fresh = fresh, surface = surface)
         }
         val requestIdentityGeneration = identityTransitions.generation.value
         val requestLanguageRevision = currentLanguageRevision
@@ -364,9 +376,10 @@ class CatalogRepository(
         surface: ArtworkSurface = ArtworkSurface.EPISODES,
         missing: MissingEpisodes = MissingEpisodes.NONE,
     ): ApiResult<EpisodesResponse> {
-        if (libraryId != null || missing != MissingEpisodes.NONE) {
+        if (libraryId != null) {
             return catalogApi.getEpisodes(seriesId, seasonNumber, libraryId, artwork.request(surface), missing)
         }
+        if (missing != MissingEpisodes.NONE) return getEpisodes(seriesId, seasonNumber, surface = surface, missing = missing)
         val key = EpisodesRequestKey(identityTransitions.generation.value, currentLanguageRevision, seriesId, seasonNumber, surface)
         inFlight(episodesInFlight, key)?.let { return it.await() }
         getCachedEpisodes(seriesId, seasonNumber, surface = surface)?.let {
